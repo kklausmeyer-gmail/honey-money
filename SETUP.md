@@ -1,5 +1,7 @@
 # Honey Money: set up your two accounts
 
+Your app URL is **https://kklausmeyer-gmail.github.io/honey-money/**. GitHub Pages is configured to deploy through Actions; the repository setup in step 4 has been completed. Continue with Supabase steps 1–3 and 5–7 yourself.
+
 Run the Supabase steps yourself in your own browser. Codex does not need dashboard access, a database connection, or screenshots of account secrets. Do not send expense records, passwords, MFA QR codes, setup keys, or codes into chat.
 
 ## 1. Configure authentication
@@ -50,7 +52,7 @@ No database secret is needed in GitHub Actions. If a key starts with `sb_secret_
 
 In Supabase **Authentication → URL Configuration**:
 
-- Set **Site URL** to the exact published Pages URL, including the repository path and trailing slash.
+- Set **Site URL** to `https://kklausmeyer-gmail.github.io/honey-money/`, including the repository path and trailing slash.
 - Add that same exact URL to allowed **Redirect URLs**.
 - If testing locally, also add the exact local URL printed by Vite, normally `http://127.0.0.1:5173/`. Do not use broad production wildcards. Remove the local redirect when you no longer need it.
 

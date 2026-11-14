@@ -2,6 +2,8 @@
 
 A private shared-expense app for Jenny and Kirk. GitHub Pages serves the static interface; Supabase Auth and Postgres Row Level Security protect the records.
 
+App: https://kklausmeyer-gmail.github.io/honey-money/
+
 **Current milestone:** account setup, email/password sign-in and recovery, mandatory authenticator verification, two-person membership, expense entry, exact cent-based splitting, balance calculation, and searchable expenses. No CSV import is enabled. Recurring reminders, settlements, editing/history, and exports are later milestones. Do not use the displayed balance as a replacement for your existing Splitwise balance yet.
 
 ## Start here
@@ -49,6 +51,7 @@ Only `dist/` is deployed. Keep `data/` and `.env*` out of Git. Do not upload the
 - `supabase/02-members.sql`: owner-run template for the two existing Auth user IDs.
 - `supabase/03-access-tests.sql`: rollback-only synthetic access tests. Run yourself.
 - `.github/workflows/pages.yml`: test, build and publish to GitHub Pages.
+- `scripts/github-pages.mjs`: optional owner-run Pages enablement/deployment helper; uses existing Git authentication without saving credentials.
 - `src/`: browser application. Uses no privileged database credential.
 
 ## Future Splitwise import
