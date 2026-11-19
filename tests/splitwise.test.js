@@ -22,6 +22,16 @@ test('quoted descriptions, settlements, refunds and zero rows conserve exact bal
   assert.deepEqual(csvRows('"a\nb","c"\r\n'), [['a\nb', 'c']]);
 });
 
+test('US dates normalize without timezone shifts and reject invalid calendar dates', () => {
+  const dates = ['"5/16/2018"', '05/06/2018', '2/29/2024', '2026-01-01'];
+  const preview = previewSplitwise(csv(...dates.map(date => `${date},Example,General,10,USD,5,-5`)));
+  assert.deepEqual(preview.rows.map(r => r.expense_date), ['2018-05-16', '2018-05-06', '2024-02-29', '2026-01-01']);
+  assert.equal(preview.net, -2000);
+  for (const date of ['2/29/2023', '4/31/2018', '13/1/2018', '0/1/2018', '5/0/2018', '5/16/18', '16/5/2018']) {
+    assert.throws(() => previewSplitwise(csv(`${date},Example,General,10,USD,5,-5`)), /valid M\/D\/YYYY/);
+  }
+});
+
 test('invalid exports fail closed rather than silently dropping rows', () => {
   for (const row of [
     '2026-02-30,Bad date,General,10,USD,5,-5',

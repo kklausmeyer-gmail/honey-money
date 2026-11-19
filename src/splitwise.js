@@ -34,6 +34,15 @@ export function signedCents(value) {
   return (Number(whole) * 100 + Number(fraction.padEnd(2, '0'))) * (text.startsWith('-') ? -1 : 1);
 }
 
+function importDate(value) {
+  const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+  const date = us ? `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}` : value;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date < '1900-01-01') {
+    throw new Error('Expected a valid M/D/YYYY or YYYY-MM-DD date. Summary/footer rows must be reviewed separately.');
+  }
+  return date;
+}
+
 export function previewSplitwise(text) {
   const csv = csvRows(text);
   if (!csv.length || csv[0].length !== HEADERS.length || csv[0].some((v, i) => v.trim() !== HEADERS[i])) {
@@ -45,10 +54,8 @@ export function previewSplitwise(text) {
     try {
       const r = csv[i].map(c => c.trim());
       if (r.length !== 7) throw new Error('Expected seven columns.');
-      const [date, description, category, cost, currency, jenny, kirk] = r;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date || date < '1900-01-01') {
-        throw new Error('Expected a valid YYYY-MM-DD date. Summary/footer rows must be reviewed separately.');
-      }
+      const [rawDate, description, category, cost, currency, jenny, kirk] = r;
+      const date = importDate(rawDate);
       if (!description || description.length > 200 || category.length > 80) throw new Error('Description/category is missing or too long.');
       if (currency !== 'USD') throw new Error('Only USD is supported. Currency conversion is not automatic.');
       const amount = signedCents(cost), jennyDelta = signedCents(jenny), kirkDelta = signedCents(kirk);
