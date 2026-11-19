@@ -4,7 +4,7 @@ A private shared-expense app for Jenny and Kirk. GitHub Pages serves the static 
 
 App: https://kklausmeyer-gmail.github.io/honey-money/
 
-**Current milestone:** account setup, email/password sign-in and recovery, mandatory authenticator verification, two-person membership, expense entry, exact cent-based splitting, balance calculation, and searchable expenses. No CSV import is enabled. Recurring reminders, settlements, editing/history, and exports are later milestones. Do not use the displayed balance as a replacement for your existing Splitwise balance yet.
+**Current milestone:** account setup, email/password sign-in and recovery, mandatory authenticator verification, two-person membership, expense entry, exact cent-based splitting, balance calculation, and searchable expenses. A preview-first, one-time Splitwise importer is prepared in source; install migration 04 and run import tests 05 before deploying and using it. Recurring reminders, settlements, editing/history, and exports are later milestones. Do not use the displayed balance as a replacement for your existing Splitwise balance yet.
 
 ## Start here
 
@@ -54,6 +54,10 @@ Only `dist/` is deployed. Keep `data/` and `.env*` out of Git. Do not upload the
 - `scripts/github-pages.mjs`: optional owner-run Pages enablement/deployment helper; uses existing Git authentication without saving credentials.
 - `src/`: browser application. Uses no privileged database credential.
 
-## Future Splitwise import
+## Splitwise import
 
-Keep the full CSV private and untracked. Do not upload it here. A later browser importer will preview rows and preserve original balance deltas, treat `Payment` as settlements, skip empty rows, and reconcile balances before committing an import batch. Historical payer/split information that cannot be inferred will remain unknown. Do not import the CSV into `expenses` directly: that table currently expects explicit payer/share fields that the sample does not fully provide.
+As of November 17, 2026, both accounts work, password reset works, and the owner reports passing database access tests. The chosen backup approach is [manual CSV export through the Supabase dashboard](./SETUP.md#simple-manual-expense-backups-chosen-approach). A fresh Splitwise export is ready; no production import has been performed. See [saved progress](./SETUP.md#progress-saved-november-17-2026) when resuming.
+
+Keep the full CSV private and untracked. Do not upload it here. The browser importer previews all rows, preserves original balance deltas, treats the `Payment` category as settlements, skips empty rows, and requires the current Splitwise group balance to match before committing one atomic batch. Database rules enforce household membership and MFA, prevent a second import (even with a different file), and require an empty initial ledger. Unsupported currencies, invalid amounts/dates, and summary/footer records block the import instead of being silently dropped. Historical payer/split information that cannot be inferred will remain unknown. Do not import the CSV into `expenses` directly: that table currently expects explicit payer/share fields that the sample does not fully provide.
+
+Import preparation and owner-run steps are in [SETUP.md](./SETUP.md#8-import-splitwise-history). The importer reads the file locally for preview; only confirmation sends validated records to Supabase. No original file, filename, or records are logged or stored offline. Imported history is read-only and kept separately from new expense entries; both contribute to the balance.

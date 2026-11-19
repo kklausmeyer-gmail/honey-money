@@ -1,6 +1,7 @@
 import './style.css';
 import { client, configured } from './client.js';
 import { cents, kirkShare, money, today, balance, searchable } from './domain.js';
+import { previewSplitwise, signedCents } from './splitwise.js';
 
 const app = document.querySelector('#app');
 let state = { session: null, person: null, rows: [], view: 'expenses', query: '', factor: null, enrollment: null, recovery: false };
@@ -31,7 +32,7 @@ function resetIdle() {
   if (state.session) idleTimer = setTimeout(() => { signout(); }, 15 * 60 * 1000);
 }
 for (const type of ['pointerdown', 'keydown', 'touchstart']) window.addEventListener(type, resetIdle, { passive: true });
-window.addEventListener('pagehide', () => { state.rows = []; });
+window.addEventListener('pagehide', () => { state.rows = []; document.querySelector('#expense-dialog')?.replaceChildren(); });
 
 function renderLogin() {
   app.innerHTML = `${header()}<main class="welcome"><section class="welcome-copy"><h1>A little less math.<br>A lot more <em>us.</em></h1><p>Your everyday expenses, happily together.<br>A private place for Jenny & Kirk to keep things fair.</p><div class="bunny-art" aria-hidden="true"><div class="sun">♡</div><div class="bunny one"><i></i><i></i><b>·ᴗ·</b></div><div class="bunny two"><i></i><i></i><b>·ᴗ·</b></div><span class="flower">✳</span><div class="ground"></div></div><div class="little-note">For our home, our plans, and all the little things.</div></section><section class="auth-card"><span class="pill">YOUR PRIVATE CORNER</span><h2>Hey, honey.</h2><p>Make yourself at home.</p>${notice}${configured ? `<form id="login"><label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input type="password" name="password" autocomplete="current-password" required /></label><button class="primary" type="submit">Come on in <span>→</span></button></form><button class="text-button" id="forgot">Forgot your password?</button><div class="card-footer">◈ Just Jenny & Kirk · Two-step sign-in</div>` : `<div class="setup-box"><h3>Your cozy corner is ready.</h3><p>Connect your Supabase project to enable private sign-in. Follow the setup guide included with this app.</p><p class="small">No database is connected. No expenses have been imported.</p></div>`}</section></main><footer>Made for two. With a little honey.</footer>`;
@@ -151,21 +152,92 @@ async function loadExpenses(ticket = generation) {
     if (data.length < 500) break;
     offset += 500;
   }
+  let historyOffset = 0;
+  let importAvailable = true;
+  while (true) {
+    const { data, error } = await client.from('splitwise_history').select('*').order('expense_date', { ascending: false }).order('id').range(historyOffset, historyOffset + 499);
+    if (ticket !== generation) return;
+    if (error) {
+      // Old deployments remain usable before the owner installs migration 04.
+      if (error.code === 'PGRST205' || error.code === '42P01') { importAvailable = false; break; }
+      return authCard('Couldn’t open your history.', '<p>Refresh or sign out and try again. Your balance is hidden until all records can be loaded.</p>');
+    }
+    rows.push(...data.map(r => ({ ...r, source: 'splitwise', tags: [] })));
+    if (data.length < 500) break;
+    historyOffset += 500;
+  }
+  rows.sort((a, b) => b.expense_date.localeCompare(a.expense_date) || a.id.localeCompare(b.id));
+  state.importAvailable = importAvailable;
   state.rows = rows;
   renderDashboard();
 }
 function renderDashboard() {
   const net = balance(state.rows);
-  app.innerHTML = `${header()}<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">OUR EVERYDAY, TOGETHER</span><h1>Hey, ${state.person === 'jenny' ? 'Jenny' : 'Kirk'} <span class="heart">♡</span></h1><p>All the little things that add up to us.</p></div><button class="primary compact" id="add">+ Add an expense</button></div><section class="summary"><div><span class="eyebrow">KEEPING THINGS FAIR</span><h2>${net === 0 ? 'All square, honey.' : `${net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(net))}`}</h2><p>${state.rows.length ? 'Based on the expenses entered here.' : 'Your fresh start. No expenses entered yet.'}</p></div><span class="summary-art" aria-hidden="true">♡<small>you + me</small></span></section><section class="ledger"><div class="ledger-top"><h2>Our expenses <span class="count">${state.rows.length}</span></h2><button class="quiet" id="refresh">↻ Refresh</button></div><label class="search-label"><span class="sr-only">Search expenses</span><input type="search" id="search" placeholder="Search names, notes, tags, amounts…" value="${esc(state.query)}" /></label><div id="expenses"></div></section><aside class="privacy-note">◈ Only the two of you can access these records. This session signs out after 15 minutes of inactivity.</aside></main><footer>Made for two. With a little honey.</footer><dialog id="expense-dialog"></dialog>`;
+  app.innerHTML = `${header()}<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">OUR EVERYDAY, TOGETHER</span><h1>Hey, ${state.person === 'jenny' ? 'Jenny' : 'Kirk'} <span class="heart">♡</span></h1><p>All the little things that add up to us.</p></div><button class="primary compact" id="add">+ Add an expense</button></div><section class="summary"><div><span class="eyebrow">KEEPING THINGS FAIR</span><h2>${net === 0 ? 'All square, honey.' : `${net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(net))}`}</h2><p>${state.rows.length ? 'Based on your saved expenses and imported history.' : 'Your fresh start. No expenses entered yet.'}</p></div><span class="summary-art" aria-hidden="true">♡<small>you + me</small></span></section><section class="ledger"><div class="ledger-top"><h2>Our expenses <span class="count">${state.rows.length}</span></h2><button class="quiet" id="refresh">↻ Refresh</button></div><label class="search-label"><span class="sr-only">Search expenses</span><input type="search" id="search" placeholder="Search names, notes, tags, amounts…" value="${esc(state.query)}" /></label><div id="expenses"></div></section><aside class="privacy-note">◈ Only the two of you can access these records. This session signs out after 15 minutes of inactivity.</aside></main><footer>Made for two. With a little honey.</footer><dialog id="expense-dialog"></dialog>`;
   wireSignout();
   document.querySelector('#add').onclick = renderExpenseForm;
+  if (!state.rows.some(r => r.source === 'splitwise')) {
+    const button = document.createElement('button');
+    button.className = 'quiet'; button.textContent = 'Import Splitwise history';
+    document.querySelector('.ledger-top').append(button);
+    button.onclick = renderImport;
+  }
   document.querySelector('#refresh').onclick = async () => { await route((await client.auth.getSession()).data.session); };
   document.querySelector('#search').oninput = e => { state.query = e.target.value; renderRows(); };
   renderRows();
 }
 function renderRows() {
   const rows = state.rows.filter(r => searchable(r, state.query));
-  document.querySelector('#expenses').innerHTML = rows.length ? `<div class="expense-list">${rows.map(r => `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">${esc(r.description.charAt(0).toUpperCase())}</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · ${r.paid_by === 'jenny' ? 'Jenny' : 'Kirk'} paid</p>${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}${r.tags.length ? `<p class="tags">${r.tags.map(t => `<span>#${esc(t)}</span>`).join(' ')}</p>` : ''}</div><div class="expense-amount"><strong>${money(r.amount_cents)}</strong><small>Kirk ${money(r.kirk_share_cents)}<br>Jenny ${money(r.amount_cents - r.kirk_share_cents)}</small></div></article>`).join('')}</div>` : `<div class="empty-state"><span aria-hidden="true">♡</span><h3>${state.query ? 'No matches just yet.' : 'A clean slate for our next chapter.'}</h3><p>${state.query ? 'Try another name, note, date, or amount.' : 'Add your first shared expense when you’re ready.<br>Your Splitwise history can come later.'}</p></div>`;
+  document.querySelector('#expenses').innerHTML = rows.length ? `<div class="expense-list">${rows.map(r => r.source === 'splitwise' ? historyRow(r) : `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">${esc(r.description.charAt(0).toUpperCase())}</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · ${r.paid_by === 'jenny' ? 'Jenny' : 'Kirk'} paid</p>${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}${r.tags.length ? `<p class="tags">${r.tags.map(t => `<span>#${esc(t)}</span>`).join(' ')}</p>` : ''}</div><div class="expense-amount"><strong>${money(r.amount_cents)}</strong><small>Kirk ${money(r.kirk_share_cents)}<br>Jenny ${money(r.amount_cents - r.kirk_share_cents)}</small></div></article>`).join('')}</div>` : `<div class="empty-state"><span aria-hidden="true">♡</span><h3>${state.query ? 'No matches just yet.' : 'A clean slate for our next chapter.'}</h3><p>${state.query ? 'Try another name, note, date, or amount.' : 'Add your first shared expense when you’re ready.<br>Your Splitwise history can come later.'}</p></div>`;
+}
+function historyRow(r) {
+  const delta = r.kirk_delta_cents;
+  const effect = delta === 0 ? 'No balance change' : `${delta > 0 ? 'Toward Kirk' : 'Toward Jenny'} ${money(Math.abs(delta))}`;
+  return `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">↗</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · Splitwise ${r.kind === 'settlement' ? 'settlement' : 'history'}</p><p>Original payer and split unavailable in this export.</p></div><div class="expense-amount"><strong>${money(r.cost_cents)}</strong><small>${effect}</small></div></article>`;
+}
+
+function renderImport() {
+  const dialog = document.querySelector('#expense-dialog');
+  const ticket = generation;
+  dialog.innerHTML = `<div class="dialog-heading"><h2>Your Splitwise history.</h2><button class="quiet" id="close-import" aria-label="Close">✕</button></div><p class="small">Choose your original group CSV. Previewing keeps the file on this device. Saving sends the validated records to your household database. Historical payer and split details remain unknown; Payment rows are settlements.</p><div id="import-error" class="error" role="alert"></div>${!state.importAvailable ? '<p>First run <strong>supabase/04-splitwise-import.sql</strong> in your own Supabase SQL Editor, then refresh this app.</p>' : state.rows.length ? '<p>The initial import needs an empty ledger. Review existing entries before proceeding.</p>' : '<label>Splitwise CSV<input id="import-file" type="file" accept=".csv,text/csv" /></label><div id="import-preview"></div>'}`;
+  dialog.showModal();
+  document.querySelector('#close-import').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.replaceChildren(), { once: true });
+  document.querySelector('#import-file')?.addEventListener('change', async e => {
+    const target = document.querySelector('#import-preview');
+    target.replaceChildren(); document.querySelector('#import-error').textContent = '';
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.disabled = true;
+    try {
+      if (file.size > 10_000_000) throw new Error('Choose a CSV smaller than 10 MB.');
+      const preview = previewSplitwise(await file.text());
+      if (ticket !== generation || !target.isConnected || !dialog.open) return;
+      const netLabel = preview.net === 0 ? 'All settled up' : `${preview.net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(preview.net))}`;
+      target.innerHTML = `<p><strong>${preview.rows.length} records</strong>: ${preview.expenses} expenses and ${preview.payments} settlements.</p><p>Calculated balance: <strong>${netLabel}</strong></p><details><summary>Review all records</summary><div class="import-table"><table><thead><tr><th>Date</th><th>Description</th><th>Kind</th><th>Cost</th><th>Kirk’s balance change</th></tr></thead><tbody>${preview.rows.map(r => `<tr><td>${esc(r.expense_date)}</td><td>${esc(r.description)}</td><td>${r.kind}</td><td>${money(r.cost_cents)}</td><td>${money(r.kirk_delta_cents)}</td></tr>`).join('')}</tbody></table></div></details><form id="confirm-import"><label>Current balance in this Splitwise group<select name="direction"><option value="-1">Kirk owes Jenny</option><option value="1">Jenny owes Kirk</option><option value="0">All settled up</option></select></label><label>Balance amount ($)<input name="expected" inputmode="decimal" required placeholder="0.00" /></label><label class="duplicate"><input type="checkbox" required /> I checked the records and current group balance. This is the complete history, and I want to import it once.</label><button class="primary" type="submit">Confirm and import history →</button></form>`;
+      document.querySelector('#confirm-import').onsubmit = async event => {
+        event.preventDefault();
+        const form = event.currentTarget, button = form.querySelector('button');
+        button.disabled = true;
+        let sent = false;
+        try {
+          const fields = new FormData(form), amount = signedCents(fields.get('expected')), direction = Number(fields.get('direction'));
+          if (amount < 0 || (direction === 0 && amount !== 0)) throw new Error('Enter a positive balance, or zero for all settled up.');
+          const expected = amount * direction;
+          if (expected !== preview.net) throw new Error('The CSV balance does not match Splitwise. Nothing has been imported. Check the group, export date, and balance.');
+          if (ticket !== generation || !dialog.open) return;
+          sent = true;
+          const { error } = await client.rpc('import_splitwise', { p_rows: preview.rows, p_expected_balance: expected });
+          if (ticket !== generation) return;
+          if (error) throw new Error('Import was not confirmed. Close this window and refresh to check whether it completed. The database prevents a second import. If no history appears, report the error code: ' + (error.code || 'connection error'));
+          dialog.close(); await loadExpenses(ticket);
+        } catch (err) {
+          if (ticket === generation && dialog.open) document.querySelector('#import-error').textContent = err.message;
+        } finally { if (!sent && button.isConnected) button.disabled = false; }
+      };
+    } catch (err) { if (ticket === generation && dialog.open) document.querySelector('#import-error').textContent = err.message; }
+    finally { if (e.target.isConnected) e.target.disabled = false; }
+  });
 }
 function renderExpenseForm() {
   const dialog = document.querySelector('#expense-dialog');

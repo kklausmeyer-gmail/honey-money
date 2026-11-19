@@ -23,8 +23,8 @@ export const today = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-export const balance = (rows) => rows.reduce((sum, row) => sum + (row.paid_by === 'kirk' ? row.amount_cents : 0) - row.kirk_share_cents, 0);
+export const balance = (rows) => rows.reduce((sum, row) => sum + (row.source === 'splitwise' ? row.kirk_delta_cents : (row.paid_by === 'kirk' ? row.amount_cents : 0) - row.kirk_share_cents), 0);
 export function searchable(row, query) {
-  return [row.description, row.notes, row.category, ...(row.tags || []), row.expense_date, (row.amount_cents / 100).toFixed(2), row.paid_by]
+  return [row.description, row.notes, row.category, ...(row.tags || []), row.expense_date, ((row.source === 'splitwise' ? row.cost_cents : row.amount_cents) / 100).toFixed(2), row.paid_by, row.source, row.kind]
     .join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
 }

@@ -32,5 +32,12 @@ test('production SQL denies outsiders and non-MFA members using an isolated loca
     assert.match(result.at(-1).rows[0].result, /^PASS:/);
     assert.equal((await db.query('select count(*)::int as count from public.expenses')).rows[0].count, 0);
     assert.equal((await db.query('select count(*)::int as count from app_private.members')).rows[0].count, 2);
+    const migration = await readFile(new URL('../supabase/04-splitwise-import.sql', import.meta.url), 'utf8');
+    await db.exec(migration);
+    await db.exec(migration);
+    const importResult = await db.exec(await readFile(new URL('../supabase/05-import-access-tests.sql', import.meta.url), 'utf8'));
+    assert.ok(importResult.some(r => r.rows?.some(row => /^PASS: import/.test(row.result || ''))));
+    assert.equal((await db.query('select count(*)::int as count from public.splitwise_history')).rows[0].count, 0);
+    assert.equal((await db.query('select count(*)::int as count from public.splitwise_batches')).rows[0].count, 0);
   } finally { await db.close(); }
 });
