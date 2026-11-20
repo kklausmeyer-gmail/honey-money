@@ -1,13 +1,15 @@
 import './style.css';
-import { client, configured } from './client.js';
-import { cents, kirkShare, money, today, balance, searchable } from './domain.js';
+import { client, configured, setRememberDevice } from './client.js';
+import { cents, kirkShare, money, today, balance, searchable, assumedPayer } from './domain.js';
 import { previewSplitwise, signedCents } from './splitwise.js';
+import { mfaExpiresAt } from './session.js';
+import { managementUI } from './management.js';
 
 const app = document.querySelector('#app');
 let state = { session: null, person: null, rows: [], view: 'expenses', query: '', factor: null, enrollment: null, recovery: false };
 let generation = 0;
 let authRevision = 0;
-let idleTimer;
+let mfaTimer;
 let authQueue = Promise.resolve();
 const esc = (s = '') => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icon = '<span class="brand-icon" aria-hidden="true">♡</span>';
@@ -22,22 +24,35 @@ function wireSignout() { document.querySelector('#signout')?.addEventListener('c
 async function signout() {
   authRevision++;
   generation++;
-  clearTimeout(idleTimer);
+  clearTimeout(mfaTimer);
   state = { session: null, person: null, rows: [], view: 'expenses', query: '', factor: null, enrollment: null, recovery: false };
   renderLogin();
   if (client) await client.auth.signOut({ scope: 'local' });
 }
-function resetIdle() {
-  clearTimeout(idleTimer);
-  if (state.session) idleTimer = setTimeout(() => { signout(); }, 15 * 60 * 1000);
+function scheduleMfaCheck() {
+  clearTimeout(mfaTimer);
+  const expiry = mfaExpiresAt(state.session);
+  if (expiry > Date.now()) mfaTimer = setTimeout(async () => {
+    if (!state.session) return;
+    if (mfaExpiresAt(state.session) <= Date.now()) await route((await client.auth.getSession()).data.session);
+    else scheduleMfaCheck();
+  }, Math.min(expiry - Date.now(), 60 * 60 * 1000));
 }
-for (const type of ['pointerdown', 'keydown', 'touchstart']) window.addEventListener(type, resetIdle, { passive: true });
-window.addEventListener('pagehide', () => { state.rows = []; document.querySelector('#expense-dialog')?.replaceChildren(); });
+const management = managementUI({ client, getState: () => state, refresh: () => loadExpenses(), esc,
+  editExpense: row => renderExpenseForm(row), addSchedule: () => renderExpenseForm(null, true) });
+window.addEventListener('pageshow', event => { if (event.persisted && client) client.auth.getSession().then(({data}) => route(data.session)); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !state.session) return;
+  if (mfaExpiresAt(state.session) <= Date.now()) client.auth.getSession().then(({data}) => route(data.session));
+  else if (document.querySelector('#recurring-list')) management.wireRecurring();
+});
+window.addEventListener('pagehide', () => { state.rows = []; state.schedules = []; document.querySelector('#expense-dialog')?.replaceChildren(); });
 
 function renderLogin() {
-  app.innerHTML = `${header()}<main class="welcome"><section class="welcome-copy"><h1>A little less math.<br>A lot more <em>us.</em></h1><p>Your everyday expenses, happily together.<br>A private place for Jenny & Kirk to keep things fair.</p><div class="bunny-art" aria-hidden="true"><div class="sun">♡</div><div class="bunny one"><i></i><i></i><b>·ᴗ·</b></div><div class="bunny two"><i></i><i></i><b>·ᴗ·</b></div><span class="flower">✳</span><div class="ground"></div></div><div class="little-note">For our home, our plans, and all the little things.</div></section><section class="auth-card"><span class="pill">YOUR PRIVATE CORNER</span><h2>Hey, honey.</h2><p>Make yourself at home.</p>${notice}${configured ? `<form id="login"><label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input type="password" name="password" autocomplete="current-password" required /></label><button class="primary" type="submit">Come on in <span>→</span></button></form><button class="text-button" id="forgot">Forgot your password?</button><div class="card-footer">◈ Just Jenny & Kirk · Two-step sign-in</div>` : `<div class="setup-box"><h3>Your cozy corner is ready.</h3><p>Connect your Supabase project to enable private sign-in. Follow the setup guide included with this app.</p><p class="small">No database is connected. No expenses have been imported.</p></div>`}</section></main><footer>Made for two. With a little honey.</footer>`;
+  app.innerHTML = `${header()}<main class="welcome"><section class="welcome-copy"><h1>A little less math.<br>A lot more <em>us.</em></h1><p>Your everyday expenses, happily together.<br>A private place for Jenny & Kirk to keep things fair.</p><div class="bunny-art" aria-hidden="true"><div class="sun">♡</div><div class="bunny one"><i></i><i></i><b>·ᴗ·</b></div><div class="bunny two"><i></i><i></i><b>·ᴗ·</b></div><span class="flower">✳</span><div class="ground"></div></div><div class="little-note">For our home, our plans, and all the little things.</div></section><section class="auth-card"><span class="pill">YOUR PRIVATE CORNER</span><h2>Hey, honey.</h2><p>Make yourself at home.</p>${notice}${configured ? `<form id="login"><label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input type="password" name="password" autocomplete="current-password" required /></label><label class="duplicate"><input type="checkbox" name="remember" checked /> Keep me signed in on this personal device for up to 30 days.</label><button class="primary" type="submit">Come on in <span>→</span></button></form><button class="text-button" id="forgot">Forgot your password?</button><div class="card-footer">◈ Just Jenny & Kirk · Two-step sign-in</div>` : `<div class="setup-box"><h3>Your cozy corner is ready.</h3><p>Connect your Supabase project to enable private sign-in. Follow the setup guide included with this app.</p><p class="small">No database is connected. No expenses have been imported.</p></div>`}</section></main><footer>Made for two. With a little honey.</footer>`;
   wireSignout();
   document.querySelector('#login')?.addEventListener('submit', e => action(e, async form => {
+    setRememberDevice(Boolean(form.get('remember')));
     const { error } = await client.auth.signInWithPassword({ email: form.get('email'), password: form.get('password') });
     if (error) throw new Error('Could not sign in. Check your email and password, then try again.');
   }));
@@ -81,8 +96,9 @@ async function route(session) {
   const ticket = ++generation;
   state.session = session;
   state.rows = [];
+  state.schedules = [];
   if (!session) return renderLogin();
-  resetIdle();
+  scheduleMfaCheck();
   authCard('One little moment…', '<p>Checking your private space.</p>');
   const { data: person, error } = await client.rpc('my_membership');
   if (ticket !== generation) return;
@@ -92,7 +108,12 @@ async function route(session) {
   const { data: assurance, error: assuranceError } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
   if (ticket !== generation) return;
   if (assuranceError) return authCard('Couldn’t verify your session.', '<p>Please sign out and try again.</p>');
-  if (assurance.currentLevel !== 'aal2') return renderMfa(ticket);
+  if (assurance.currentLevel !== 'aal2' || mfaExpiresAt(session) <= Date.now()) return renderMfa(ticket);
+  const access = await client.rpc('household_access');
+  if (ticket !== generation) return;
+  state.managementAvailable = !access.error;
+  if (access.error && access.error.code !== 'PGRST202' && access.error.code !== '42883') return authCard('Couldn’t verify access.', '<p>Refresh or sign out and try again.</p>');
+  if (!access.error && !access.data) return renderMfa(ticket);
   if (state.recovery) return renderNewPassword();
   state.enrollment = null;
   state.factor = null;
@@ -148,10 +169,11 @@ async function loadExpenses(ticket = generation) {
     const { data, error } = await client.from('expenses').select('*').order('expense_date', { ascending: false }).order('id').range(offset, offset + 499);
     if (ticket !== generation) return;
     if (error) return authCard('Couldn’t open your expenses.', '<p>Please sign out and try again. If this keeps happening, check that the schema and access rules are installed.</p>');
-    rows.push(...data);
+    rows.push(...data.filter(r => !r.deleted_at));
     if (data.length < 500) break;
     offset += 500;
   }
+  state.hasImported = false;
   let historyOffset = 0;
   let importAvailable = true;
   while (true) {
@@ -162,21 +184,35 @@ async function loadExpenses(ticket = generation) {
       if (error.code === 'PGRST205' || error.code === '42P01') { importAvailable = false; break; }
       return authCard('Couldn’t open your history.', '<p>Refresh or sign out and try again. Your balance is hidden until all records can be loaded.</p>');
     }
-    rows.push(...data.map(r => ({ ...r, source: 'splitwise', tags: [] })));
+    rows.push(...data.filter(r => !r.deleted_at).map(r => ({ ...r, source: 'splitwise', tags: [] })));
+    if (data.length) state.hasImported = true;
     if (data.length < 500) break;
     historyOffset += 500;
   }
   rows.sort((a, b) => b.expense_date.localeCompare(a.expense_date) || a.id.localeCompare(b.id));
   state.importAvailable = importAvailable;
   state.rows = rows;
+  state.schedules = [];
+  if (state.managementAvailable) {
+    let scheduleOffset = 0;
+    while (true) {
+      const { data, error } = await client.from('recurring_expenses').select('*').order('id').range(scheduleOffset, scheduleOffset + 499);
+      if (ticket !== generation) return;
+      if (error) return authCard('Couldn’t open your reminders.', '<p>Refresh or sign out and try again.</p>');
+      state.schedules.push(...data);
+      if (data.length < 500) break;
+      scheduleOffset += 500;
+    }
+  }
   renderDashboard();
 }
 function renderDashboard() {
   const net = balance(state.rows);
-  app.innerHTML = `${header()}<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">OUR EVERYDAY, TOGETHER</span><h1>Hey, ${state.person === 'jenny' ? 'Jenny' : 'Kirk'} <span class="heart">♡</span></h1><p>All the little things that add up to us.</p></div><button class="primary compact" id="add">+ Add an expense</button></div><section class="summary"><div><span class="eyebrow">KEEPING THINGS FAIR</span><h2>${net === 0 ? 'All square, honey.' : `${net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(net))}`}</h2><p>${state.rows.length ? 'Based on your saved expenses and imported history.' : 'Your fresh start. No expenses entered yet.'}</p></div><span class="summary-art" aria-hidden="true">♡<small>you + me</small></span></section><section class="ledger"><div class="ledger-top"><h2>Our expenses <span class="count">${state.rows.length}</span></h2><button class="quiet" id="refresh">↻ Refresh</button></div><label class="search-label"><span class="sr-only">Search expenses</span><input type="search" id="search" placeholder="Search names, notes, tags, amounts…" value="${esc(state.query)}" /></label><div id="expenses"></div></section><aside class="privacy-note">◈ Only the two of you can access these records. This session signs out after 15 minutes of inactivity.</aside></main><footer>Made for two. With a little honey.</footer><dialog id="expense-dialog"></dialog>`;
+  app.innerHTML = `${header()}<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">OUR EVERYDAY, TOGETHER</span><h1>Hey, ${state.person === 'jenny' ? 'Jenny' : 'Kirk'} <span class="heart">♡</span></h1><p>All the little things that add up to us.</p></div><button class="primary compact" id="add">+ Add an expense</button></div><section class="summary"><div><span class="eyebrow">KEEPING THINGS FAIR</span><h2>${net === 0 ? 'All square, honey.' : `${net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(net))}`}</h2><p>${state.rows.length ? 'Based on your saved expenses and imported history.' : 'Your fresh start. No expenses entered yet.'}</p></div><span class="summary-art" aria-hidden="true">♡<small>you + me</small></span></section>${management.recurringMarkup()}<section class="ledger"><div class="ledger-top"><h2>Our expenses <span class="count">${state.rows.length}</span></h2><button class="quiet" id="refresh">↻ Refresh</button></div><label class="search-label"><span class="sr-only">Search expenses</span><input type="search" id="search" placeholder="Search names, notes, tags, amounts…" value="${esc(state.query)}" /></label><div id="expenses"></div></section><aside class="privacy-note">◈ Only the two of you can access these records. Personal devices stay signed in for up to 30 days after authenticator verification. Sign out on shared devices.</aside></main><footer>Made for two. With a little honey.</footer><dialog id="expense-dialog"></dialog>`;
   wireSignout();
-  document.querySelector('#add').onclick = renderExpenseForm;
-  if (!state.rows.some(r => r.source === 'splitwise')) {
+  document.querySelector('#add').onclick = () => renderExpenseForm();
+  management.wireRecurring();
+  if (!state.hasImported) {
     const button = document.createElement('button');
     button.className = 'quiet'; button.textContent = 'Import Splitwise history';
     document.querySelector('.ledger-top').append(button);
@@ -188,12 +224,15 @@ function renderDashboard() {
 }
 function renderRows() {
   const rows = state.rows.filter(r => searchable(r, state.query));
-  document.querySelector('#expenses').innerHTML = rows.length ? `<div class="expense-list">${rows.map(r => r.source === 'splitwise' ? historyRow(r) : `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">${esc(r.description.charAt(0).toUpperCase())}</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · ${r.paid_by === 'jenny' ? 'Jenny' : 'Kirk'} paid</p>${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}${r.tags.length ? `<p class="tags">${r.tags.map(t => `<span>#${esc(t)}</span>`).join(' ')}</p>` : ''}</div><div class="expense-amount"><strong>${money(r.amount_cents)}</strong><small>Kirk ${money(r.kirk_share_cents)}<br>Jenny ${money(r.amount_cents - r.kirk_share_cents)}</small></div></article>`).join('')}</div>` : `<div class="empty-state"><span aria-hidden="true">♡</span><h3>${state.query ? 'No matches just yet.' : 'A clean slate for our next chapter.'}</h3><p>${state.query ? 'Try another name, note, date, or amount.' : 'Add your first shared expense when you’re ready.<br>Your Splitwise history can come later.'}</p></div>`;
+  document.querySelector('#expenses').innerHTML = rows.length ? `<div class="expense-list">${rows.map(r => r.source === 'splitwise' ? historyRow(r) : `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">${esc(r.description.charAt(0).toUpperCase())}</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · ${r.paid_by === 'jenny' ? 'Jenny' : 'Kirk'} paid</p>${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}${r.tags.length ? `<p class="tags">${r.tags.map(t => `<span>#${esc(t)}</span>`).join(' ')}</p>` : ''}${management.actions(r)}</div><div class="expense-amount"><strong>${money(r.amount_cents)}</strong><small>Kirk ${money(r.kirk_share_cents)}<br>Jenny ${money(r.amount_cents - r.kirk_share_cents)}</small></div></article>`).join('')}</div>` : `<div class="empty-state"><span aria-hidden="true">♡</span><h3>${state.query ? 'No matches just yet.' : 'A clean slate for our next chapter.'}</h3><p>${state.query ? 'Try another name, note, date, or amount.' : 'Add your first shared expense when you’re ready.<br>Your Splitwise history can come later.'}</p></div>`;
+  management.wireRows();
 }
 function historyRow(r) {
   const delta = r.kirk_delta_cents;
+  const payer = assumedPayer(r);
+  const paid = payer ? `${payer === 'kirk' ? 'Kirk' : 'Jenny'} paid (assumed)` : r.kind === 'settlement' ? 'Payment / settlement' : 'No payer assumed';
   const effect = delta === 0 ? 'No balance change' : `${delta > 0 ? 'Toward Kirk' : 'Toward Jenny'} ${money(Math.abs(delta))}`;
-  return `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">↗</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · Splitwise ${r.kind === 'settlement' ? 'settlement' : 'history'}</p><p>Original payer and split unavailable in this export.</p></div><div class="expense-amount"><strong>${money(r.cost_cents)}</strong><small>${effect}</small></div></article>`;
+  return `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">↗</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · Splitwise ${r.kind === 'settlement' ? 'settlement' : 'history'}</p><p>${paid}. ${r.kind === 'settlement' ? 'Preserved payment balance change.' : 'Shared expense; original split details unavailable.'}</p>${management.actions(r)}</div><div class="expense-amount"><strong>${money(r.cost_cents)}</strong><small>${effect}</small></div></article>`;
 }
 
 function renderImport() {
@@ -239,9 +278,25 @@ function renderImport() {
     finally { if (e.target.isConnected) e.target.disabled = false; }
   });
 }
-function renderExpenseForm() {
+function renderExpenseForm(row = null, recurring = false) {
+  const ticket = generation;
   const dialog = document.querySelector('#expense-dialog');
   dialog.innerHTML = `<form id="expense-form"><div class="dialog-heading"><h2>A little something shared.</h2><button type="button" id="close" class="quiet" aria-label="Close">✕</button></div><p class="small">All amounts in USD. For an odd cent, Jenny takes the extra cent in an equal split.</p><div id="form-error" class="error" role="alert"></div><label>Name<input name="description" maxlength="200" required placeholder="What was it for?" /></label><div class="form-grid"><label>Date<input name="expense_date" type="date" value="${today()}" required /></label><label>Amount ($)<input name="amount" inputmode="decimal" required placeholder="0.00" /></label></div><div class="form-grid"><label>Who paid?<select name="paid_by"><option value="${state.person}">${state.person === 'jenny' ? 'Jenny' : 'Kirk'}</option><option value="${state.person === 'jenny' ? 'kirk' : 'jenny'}">${state.person === 'jenny' ? 'Kirk' : 'Jenny'}</option></select></label><label>How do we split it?<select name="split" id="split"><option value="half">50 / 50</option><option value="kirk">All Kirk</option><option value="jenny">All Jenny</option><option value="custom">Custom amounts</option></select></label></div><label id="custom-label" hidden>Kirk’s share ($)<input name="custom" inputmode="decimal" placeholder="0.00" /><small>Jenny’s share is the remainder.</small></label><div class="form-grid"><label>Category<input name="category" maxlength="80" value="General" list="categories" /><datalist id="categories"><option>Groceries</option><option>Home</option><option>Dining</option><option>Travel</option><option>Utilities</option><option>Health</option></datalist></label><label>Tags<input name="tags" placeholder="home, monthly" maxlength="500" /></label></div><label>Notes<textarea name="notes" maxlength="4000" rows="3" placeholder="Auto debited, paid by Zelle, anything to remember…"></textarea></label><label id="duplicate-label" hidden class="duplicate"><input type="checkbox" name="confirm_duplicate" /> A similar expense exists. Save this one too.</label><button type="submit" class="primary">Save our expense →</button></form>`;
+  const formElement = document.querySelector('#expense-form');
+  if (row) {
+    const values = { ...row, amount: (row.amount_cents / 100).toFixed(2), custom: (row.kirk_share_cents / 100).toFixed(2), split: 'custom', tags: row.tags.join(', ') };
+    for (const [key, value] of Object.entries(values)) if (formElement.elements.namedItem(key)) formElement.elements.namedItem(key).value = value;
+    document.querySelector('#custom-label').hidden = false;
+    formElement.querySelector('h2').textContent = 'Edit your expense.';
+    formElement.querySelector('[type="submit"]').textContent = 'Save changes';
+  }
+  if (recurring) {
+    formElement.querySelector('h2').textContent = 'A recurring little thing.';
+    const schedule = document.createElement('label');
+    schedule.innerHTML = 'Repeat<select name="frequency"><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>The date above is the first due date. Each occurrence needs confirmation; creating a schedule adds no expenses.</small>';
+    formElement.querySelector('[type="submit"]').before(schedule);
+    formElement.querySelector('[type="submit"]').textContent = 'Create recurring reminder';
+  }
   dialog.showModal();
   document.querySelector('#close').onclick = () => dialog.close();
   document.querySelector('#split').onchange = e => { document.querySelector('#custom-label').hidden = e.target.value !== 'custom'; };
@@ -257,12 +312,19 @@ function renderExpenseForm() {
       if (!description) throw new Error('Give this expense a name.');
       const tags = form.get('tags').split(',').map(t => t.trim()).filter(Boolean);
       if (tags.length > 20) throw new Error('Use at most 20 tags.');
-      const duplicate = state.rows.some(r => r.expense_date === form.get('expense_date') && r.amount_cents === amount && r.description.toLowerCase() === description.toLowerCase());
+      const duplicate = !recurring && state.rows.some(r => r.id !== row?.id && r.expense_date === form.get('expense_date') && r.amount_cents === amount && r.description.toLowerCase() === description.toLowerCase());
       if (duplicate && !form.get('confirm_duplicate')) {
         document.querySelector('#duplicate-label').hidden = false;
         throw new Error('We found an expense with the same date, name, and amount. Check the box if this is a separate expense.');
       }
-      const { error } = await client.from('expenses').insert({ description, expense_date: form.get('expense_date'), amount_cents: amount, paid_by: form.get('paid_by'), kirk_share_cents: kirkShare(amount, form.get('split'), form.get('custom')), category: form.get('category').trim() || 'General', tags, notes: form.get('notes').trim() });
+      const values = { description, expense_date: form.get('expense_date'), amount_cents: amount, paid_by: form.get('paid_by'), kirk_share_cents: kirkShare(amount, form.get('split'), form.get('custom')), category: form.get('category').trim() || 'General', tags, notes: form.get('notes').trim() };
+      if (ticket !== generation) return;
+      const { error } = recurring
+        ? await client.rpc('save_recurring', { p_id: null, p_version: null, p_values: { ...values, frequency: form.get('frequency'), anchor_date: values.expense_date } })
+        : row ? await client.rpc('change_expense', { p_source: 'expenses', p_id: row.id, p_version: row.version, p_action: 'edit', p_values: values })
+        : await client.from('expenses').insert(values);
+      if (ticket !== generation) return;
+      if (error?.code === '40001') throw new Error('This entry changed on another device. Close this window, refresh, and try again.');
       if (error) throw new Error('Could not save. Check your connection and session, then try again.');
       dialog.close();
       await loadExpenses();
@@ -275,8 +337,16 @@ if (client) {
   client.auth.onAuthStateChange((event, session) => {
     // Run async auth work outside Supabase's callback lock.
     if (event === 'PASSWORD_RECOVERY') state.recovery = true;
-    if (event === 'SIGNED_OUT') { authRevision++; generation++; state.rows = []; state.session = null; state.person = null; clearTimeout(idleTimer); renderLogin(); return; }
-    if (event === 'TOKEN_REFRESHED') { state.session = session; return; }
+    if (event === 'SIGNED_OUT') { authRevision++; generation++; state = { session: null, person: null, rows: [], schedules: [], query: '', factor: null, enrollment: null, recovery: false }; clearTimeout(mfaTimer); renderLogin(); return; }
+    if (event === 'TOKEN_REFRESHED') {
+      state.session = session; scheduleMfaCheck();
+      if (mfaExpiresAt(session) <= Date.now()) {
+        state.rows = [];
+        const revision = ++authRevision;
+        authQueue = authQueue.then(() => new Promise(resolve => setTimeout(resolve, 0))).then(() => { if (revision === authRevision) return route(session); }).catch(() => { state.rows = []; state.schedules = []; authCard('A small connection hiccup.', '<p>Please sign out and try again.</p>'); });
+      }
+      return;
+    }
     if (['INITIAL_SESSION', 'SIGNED_IN', 'PASSWORD_RECOVERY', 'MFA_CHALLENGE_VERIFIED'].includes(event)) {
       const revision = ++authRevision;
       authQueue = authQueue.then(() => new Promise(resolve => setTimeout(resolve, 0))).then(() => {

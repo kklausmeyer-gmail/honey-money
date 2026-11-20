@@ -67,7 +67,7 @@ Use [Supabase's URL configuration guide](https://supabase.com/docs/guides/auth/r
 5. Sign out and sign back in. Both accounts should require a current authenticator code. Confirm both devices see the same empty household.
 6. Use **Forgot your password?** to test delivery and the reset flow on your own device. An account with MFA still needs its authenticator before changing the password. Resetting a password does not bypass MFA.
 
-Session tokens stay in the browser tab's session storage. Sessions normally do not survive closing the tab, but browser restore/duplicate-tab behavior may copy session storage. Use **Sign out** on a shared device. Signing out here signs out this session; it does not sign out Jenny's device.
+In the November 19 release, the personal-device checkbox keeps authentication in localStorage across browser restarts for up to 30 days after MFA. Uncheck it on shared devices to use tab-only sessionStorage. Explicit sign-out clears this device's credentials and requires password/MFA again next time; it does not sign out Jenny's device. Browser restore can retain sessionStorage. The database checks the original MFA timestamp even when tokens refresh.
 
 ## 7. Readiness gate before real data
 
@@ -83,7 +83,7 @@ Once these pass, tell Codex only that account setup passed, or the non-sensitive
 
 ## 8. Import Splitwise history
 
-Prepared November 18, 2026. No production import has been performed. The expected export headers are `Date,Description,Category,Cost,Currency,Jenny,Kirk Klausmeyer`. The reported current group balance is **Kirk owes Jenny $751.59**; recheck it if anything changes before import.
+Completed November 18, 2026: migration 04 and access tests 05 passed, the importer was deployed, and Kirk reports successful import and search. The steps below are retained for reference; do not repeat the import or run empty-ledger tests against the populated production ledger. The expected export headers are `Date,Description,Category,Cost,Currency,Jenny,Kirk Klausmeyer`. The reported current group balance is **Kirk owes Jenny $751.59**; recheck it if anything changes before import.
 
 1. In your own Supabase SQL Editor, open a fresh query and run all of `supabase/04-splitwise-import.sql`. This additive migration creates separate history/batch tables and an atomic import function. It does not change existing memberships or disable RLS.
 2. In another query, run `supabase/05-import-access-tests.sql`. Expect `PASS: import access, balance validation, rollback, and repeat protection`. This uses synthetic records and rolls them back. It requires an empty ledger; stop on any error. If a query leaves the editor in an aborted transaction, run `ROLLBACK;` before trying again.
@@ -93,7 +93,7 @@ Prepared November 18, 2026. No production import has been performed. The expecte
 6. Confirm only after reviewing the complete export. The database saves the entire batch or none of it. The importer is one-time and requires an empty ledger. If a network error leaves the result uncertain, close the dialog and refresh to check for history; do not manually insert rows or clear the batch.
 7. Check the final balance on both devices, then follow the CSV backup routine below. Keep the original Splitwise export.
 
-The export supplies each person's net balance change, not the original payer/share breakdown. Imported entries retain those changes and mark payer/split as unavailable. Payment rows remain settlements. The history is read-only; future expenses are saved separately and added to its balance.
+The export supplies each person's net balance change, not the original payer/share breakdown. Imported entries retain those changes and mark payer/split as unavailable. Payment rows remain settlements. History and new expenses are stored separately and both affect the balance. The November 19 release adds audited edits/deletion and assumed payer labels; these labels do not change original balance deltas.
 
 ## Simple manual expense backups (chosen approach)
 
@@ -106,19 +106,35 @@ Use the Supabase dashboard to save expense records as CSV. No Docker or command-
 5. Check privately that the file includes all columns and the expected number of records, especially when the table spans multiple pages. With an empty table, there are no expense records to back up yet.
 6. Keep a second copy in private encrypted backup storage or on an encrypted external drive. Keep backups out of GitHub and chat.
 
-Export immediately after the future Splitwise import, weekly afterward, and before bulk changes. Keep the latest eight weekly copies and the original Splitwise export. Weekly exports mean up to a week of new entries could be lost.
+The initial post-import export is still pending; Kirk plans to run it soon. After that, export weekly and before bulk changes. Keep the latest eight weekly copies and the original Splitwise export. Weekly exports mean up to a week of new entries could be lost.
 
-**After importing:** also export `public.splitwise_history` and `public.splitwise_batches` as CSV using the same steps. Keep these two files together with the first post-import backup and retain them permanently: imported history is separate from `expenses` and is read-only. Weekly backups of new entries can continue exporting `expenses`; keep the fixed history/batch copies alongside them. If the schema changes later, export all three tables again. Preserve original column names and IDs.
+**After migration 06:** export all five public tables each time: `expenses`, `splitwise_history`, `splitwise_batches`, `recurring_expenses`, and `expense_changes`. Keep the dated files together. Imported history can now be edited/deleted, so the previous advice to export it only once no longer applies. Preserve original column names and IDs. These are still record exports, not a complete project/account backup.
 
 This preserves expense records, not the full Supabase project. It does not back up accounts, passwords, MFA, membership, database rules, or dashboard settings. Keep the project setup scripts and these instructions separately. Recovery may require recreating accounts and mapping old user IDs to replacement accounts before restoring records. Do not blindly import a backup into a populated table. Test recovery in a separate project before relying on this routine; downloading a CSV alone does not prove it can be restored.
 
-## Progress saved: November 17, 2026
+## Progress saved: November 18, 2026
 
-- Kirk reports successful sign-in on computer and phone, MFA checks, and password reset.
-- Jenny's account works and shows **Hey, Jenny**.
-- Kirk reports that `03-access-tests.sql` passes.
-- Manual dashboard CSV export is the chosen backup approach. No completed backup or restore test has been reported.
-- A fresh Splitwise export is ready and should remain private. **The Splitwise import has not started.** Resume by preparing the importer and its preview/reconciliation checks; do not import the Splitwise CSV directly into `expenses`.
+- Kirk and Jenny can sign in; password reset works and Jenny sees her correct greeting.
+- Database access tests 03 and import access tests 05 passed, as reported by Kirk. The single test expense was removed before import testing.
+- The importer and US-date-format fix are deployed. Kirk reports the live Splitwise import succeeded and search works. Do not repeat the one-time import.
+- The pre-import Splitwise group balance was Kirk owes Jenny $751.59. Post-import confirmation on the second device has not been reported separately.
+- Manual dashboard CSV export remains the chosen backup approach. Kirk retains the original Splitwise export and plans to back up soon; no completed post-import backup or restore test has been reported. The original export does not cover later Honey Money entries.
+
+## 9. November 19 feature release — owner steps
+
+The code is tested, and Kirk reports migration 06 and tests 07 both passed on November 19, 2026. Deployment uses the existing GitHub Pages workflow. Kirk chose **in-app reminders with confirmation before adding each recurring expense**, and **30-day sign-in on personal devices**.
+
+1. In a fresh Supabase SQL Editor query, run all of `supabase/06-expense-management.sql`. It adds recurring schedules, version-checked edits/soft deletion, private change history, and a 30-day MFA freshness check. It does not rewrite the imported financial values.
+2. In another fresh query, run all of `supabase/07-management-tests.sql`. Expect `PASS: editing, deletion, audit, recurring dates, duplicate protection, and MFA freshness`. It uses synthetic records only and rolls them back, including when real imported expenses exist. If a failed query leaves a transaction open, run `ROLLBACK;` before retrying.
+3. Report only success or non-sensitive error text. After success, publish the prepared app through the existing GitHub Pages workflow. Do not rerun migration 01 or the old empty-ledger tests as a substitute for these tests.
+4. Refresh Honey Money. Edit a test entry, verify the updated balance, then delete it and check that it is excluded. An audit record retains the previous values. Both people can manage household entries; stale versions fail instead of overwriting another person's changes.
+5. Create a recurring schedule with an amount, payer, split, frequency, and first due date. Due reminders appear in the app using Pacific dates. **Review & Add** posts one occurrence; **Skip** advances without adding an entry. Nothing is auto-posted, emailed, or pushed to the phone. Pause/Resume stops/restarts reminders. To change amount/cadence, pause and replace the schedule. Editing/deleting an existing occurrence does not change its schedule.
+6. On a personal device, leave **Keep me signed in** selected and complete password/MFA once. Reopening should retain access until the 30-day MFA period expires (or the session is revoked/storage is cleared). Shared devices should uncheck this box. Explicit sign-out requires password/MFA again; to avoid repeated prompts on your own device, close the app instead of signing out. The old 15-minute inactivity timeout is removed.
+7. On iPhone, open the published app in Safari, then **Share → Add to Home Screen**. The honey/heart icon is supplied for iOS and the web manifest. If an existing shortcut retains an old icon, remove that shortcut and add it again. iPhone installation may need its own initial sign-in. Actual device verification is pending.
+
+Imported payer display now follows Kirk's requested assumption: “Toward Kirk” implies **Kirk paid (assumed)** and vice versa, adjusted for refunds. Payment rows remain settlements; zero-effect rows do not assume a payer. These display labels do not change the balance or invent an equal split. Imported edits expose the cost and effect on the shared balance separately.
+
+Local validation covers database access/atomicity, version conflicts, date anchoring, duplicate confirmations, MFA freshness, and mobile UI flows using fabricated records. No live expense data or signed-in browser was accessed. The CSV backup remains planned, not reported complete; with editing enabled, back up all five tables listed above.
 
 ## Recovery if an authenticator is lost
 
