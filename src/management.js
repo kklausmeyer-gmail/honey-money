@@ -1,5 +1,7 @@
 import { signedCents } from './splitwise.js';
 import { money } from './domain.js';
+import { openDialog } from './dialog.js';
+import { repeatControls, repeatValues, dueOccurrences, pacificToday } from './recurrence.js';
 
 export function managementUI({ client, getState, refresh, esc, editExpense, addSchedule }) {
   const sourceOf = row => row.source === 'splitwise' ? 'splitwise_history' : 'expenses';
@@ -7,7 +9,7 @@ export function managementUI({ client, getState, refresh, esc, editExpense, addS
   function open(title, body) {
     const dialog = document.querySelector('#expense-dialog');
     dialog.innerHTML = `<div class="dialog-heading"><h2>${title}</h2><button id="manage-close" class="quiet" aria-label="Close">✕</button></div><div id="manage-error" class="error" role="alert"></div>${body}`;
-    dialog.showModal(); document.querySelector('#manage-close').onclick = () => dialog.close();
+    openDialog(dialog); document.querySelector('#manage-close').onclick = () => dialog.close();
     return dialog;
   }
   async function submit(form, operation, dialog) {
@@ -16,7 +18,7 @@ export function managementUI({ client, getState, refresh, esc, editExpense, addS
     try {
       const result = await operation(new FormData(form));
       if (result.error) throw result.error;
-      if (getState() !== state) return;
+      if (getState() !== state || !form.isConnected || !dialog.open) return;
       dialog.close(); await refresh();
     } catch (error) {
       if (getState() === state && dialog.open) {
@@ -28,6 +30,7 @@ export function managementUI({ client, getState, refresh, esc, editExpense, addS
   function historyEdit(row) {
     const dialog = open('Edit imported entry.', `<p class="small">The cost and the amount owed are separate in the original export. Review both when changing an imported expense. Payment category means settlement.</p><form id="history-edit"><label>Name<input name="description" maxlength="200" required value="${esc(row.description)}" /></label><label>Date<input name="expense_date" type="date" required value="${esc(row.expense_date)}" /></label><label>Category<input name="category" maxlength="80" value="${esc(row.category)}" /></label><label>Original cost ($)<input name="cost" inputmode="decimal" required value="${(row.cost_cents / 100).toFixed(2)}" /></label><label>Effect on the shared balance<select name="direction"><option value="1" ${row.kirk_delta_cents > 0 ? 'selected' : ''}>Jenny owes Kirk</option><option value="-1" ${row.kirk_delta_cents < 0 ? 'selected' : ''}>Kirk owes Jenny</option><option value="0" ${row.kirk_delta_cents === 0 ? 'selected' : ''}>No balance change</option></select></label><label>Amount of this balance change ($)<input name="impact" inputmode="decimal" required value="${(Math.abs(row.kirk_delta_cents) / 100).toFixed(2)}" /></label><button class="primary" type="submit">Save changes</button></form>`);
     const form = document.querySelector('#history-edit');
+    repeatControls({ form, row, schedules: getState().schedules || [], esc, imported: true });
     form.onsubmit = event => { event.preventDefault(); submit(form, fields => {
       let cost, delta;
       try {
@@ -38,7 +41,12 @@ export function managementUI({ client, getState, refresh, esc, editExpense, addS
       }
       catch (e) { throw { userMessage: e.message }; }
       if (Math.abs(delta) > Math.abs(cost)) throw { userMessage: 'The balance change cannot exceed the cost.' };
-      return client.rpc('change_expense', { p_source: 'splitwise_history', p_id: row.id, p_version: row.version, p_action: 'edit', p_values: { description: fields.get('description').trim(), expense_date: fields.get('expense_date'), category: fields.get('category').trim(), cost_cents: cost, kirk_delta_cents: delta } });
+      const values = { description: fields.get('description').trim(), expense_date: fields.get('expense_date'), category: fields.get('category').trim(), cost_cents: cost, kirk_delta_cents: delta };
+      let repeat;
+      try { repeat = repeatValues(fields, values, true); } catch (e) { throw { userMessage: e.message }; }
+      return repeat
+        ? client.rpc('save_and_repeat_expense', { p_source: 'splitwise_history', p_id: row.id, p_version: row.version, p_new_id: null, p_values: values, p_schedule: repeat })
+        : client.rpc('change_expense', { p_source: 'splitwise_history', p_id: row.id, p_version: row.version, p_action: 'edit', p_values: values });
     }, dialog); };
   }
   function deleteEntry(row) {
@@ -63,13 +71,21 @@ export function managementUI({ client, getState, refresh, esc, editExpense, addS
   }
   function recurringMarkup() {
     if (!getState().managementAvailable) return '';
-    return '<section class="ledger recurring"><div class="ledger-top"><h2>Recurring & reminders</h2><button class="quiet" id="add-schedule">+ Recurring expense</button></div><p class="small recurring-note">Due items appear here when you open the app. Confirm each occurrence before it affects your balance. Reminder dates use Pacific time.</p><div id="recurring-list"></div></section>';
+    return '<section class="todo-bar recurring" aria-label="Recurring expense to-do list"><div class="todo-heading"><button class="todo-toggle" id="todo-toggle" aria-expanded="false" aria-controls="todo-content"><span>To do</span><span id="todo-count" class="todo-count" aria-live="polite" hidden></span><span id="todo-status" class="small">All caught up</span><span aria-hidden="true">⌄</span></button><button class="quiet" id="add-schedule">+ Recurring expense</button></div><div id="todo-content" hidden><p class="small recurring-note">Confirm each due occurrence before it affects your balance, or skip it. Dates use Pacific time. You can keep using the rest of the page.</p><div id="recurring-list"></div></div></section>';
   }
   function wireRecurring() {
     if (!getState().managementAvailable) return;
     document.querySelector('#add-schedule').onclick = addSchedule;
-    const pacificDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const pacificDate = pacificToday();
     const schedules = getState().schedules || [];
+    const count = schedules.reduce((sum,r) => sum + dueOccurrences(r,pacificDate),0);
+    const badge = document.querySelector('#todo-count');
+    badge.textContent = count; badge.hidden = count === 0;
+    document.querySelector('#todo-status').textContent = count ? `${count === 1 ? 'recurring expense' : 'recurring expenses'} due` : 'All caught up';
+    const toggle = document.querySelector('#todo-toggle'), content = document.querySelector('#todo-content');
+    content.hidden = !getState().todoOpen;
+    toggle.setAttribute('aria-expanded', String(!content.hidden));
+    toggle.onclick = () => { content.hidden = !content.hidden; getState().todoOpen = !content.hidden; toggle.setAttribute('aria-expanded', String(!content.hidden)); };
     const ordered = [...schedules].sort((a,b) => Number(b.active) - Number(a.active) || a.next_due.localeCompare(b.next_due));
     document.querySelector('#recurring-list').innerHTML = ordered.length ? ordered.map(r => `<article class="expense-row"><div class="expense-title"><h3>${esc(r.description)} · ${money(r.amount_cents)}</h3><p>${esc(r.frequency)} · ${r.active ? `Next: ${esc(r.next_due)}` : 'Paused'}${r.active && r.next_due <= pacificDate ? ' · Due now' : ''}</p><div class="row-actions">${r.active && r.next_due <= pacificDate ? `<button class="quiet" data-confirm="${r.id}">Review & add</button><button class="quiet" data-skip="${r.id}">Skip this occurrence</button>` : ''}<button class="quiet" data-pause="${r.id}">${r.active ? 'Pause' : 'Resume'}</button></div></div></article>`).join('') : '<p class="small recurring-note">No recurring expenses yet.</p>';
     for (const action of ['confirm','skip','pause']) document.querySelectorAll(`[data-${action}]`).forEach(button => {

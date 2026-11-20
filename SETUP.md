@@ -1,6 +1,6 @@
 # Honey Money: set up your two accounts
 
-Your app URL is **https://kklausmeyer-gmail.github.io/honey-money/**. GitHub Pages is configured to deploy through Actions; the repository setup in step 4 has been completed. Continue with Supabase steps 1–3 and 5–7 yourself.
+Your app URL is **https://kklausmeyer-gmail.github.io/honey-money/**. GitHub Pages is configured to deploy through Actions; the repository setup in step 4 has been completed. Account setup and import are complete. The November 19 release is live; see the saved progress and testing checklist below. The numbered setup steps remain as reference.
 
 Run the Supabase steps yourself in your own browser. Codex does not need dashboard access, a database connection, or screenshots of account secrets. Do not send expense records, passwords, MFA QR codes, setup keys, or codes into chat.
 
@@ -112,21 +112,22 @@ The initial post-import export is still pending; Kirk plans to run it soon. Afte
 
 This preserves expense records, not the full Supabase project. It does not back up accounts, passwords, MFA, membership, database rules, or dashboard settings. Keep the project setup scripts and these instructions separately. Recovery may require recreating accounts and mapping old user IDs to replacement accounts before restoring records. Do not blindly import a backup into a populated table. Test recovery in a separate project before relying on this routine; downloading a CSV alone does not prove it can be restored.
 
-## Progress saved: November 18, 2026
+## Progress saved: November 19, 2026
 
 - Kirk and Jenny can sign in; password reset works and Jenny sees her correct greeting.
 - Database access tests 03 and import access tests 05 passed, as reported by Kirk. The single test expense was removed before import testing.
 - The importer and US-date-format fix are deployed. Kirk reports the live Splitwise import succeeded and search works. Do not repeat the one-time import.
+- Migration 06 and management tests 07 passed, as reported by Kirk. Release commit `7d11250` deployed successfully; the public app bundle and Apple touch icon were verified. Kirk plans to test the updated live features; user acceptance checks remain pending.
 - The pre-import Splitwise group balance was Kirk owes Jenny $751.59. Post-import confirmation on the second device has not been reported separately.
 - Manual dashboard CSV export remains the chosen backup approach. Kirk retains the original Splitwise export and plans to back up soon; no completed post-import backup or restore test has been reported. The original export does not cover later Honey Money entries.
 
 ## 9. November 19 feature release — owner steps
 
-The code is tested, and Kirk reports migration 06 and tests 07 both passed on November 19, 2026. Deployment uses the existing GitHub Pages workflow. Kirk chose **in-app reminders with confirmation before adding each recurring expense**, and **30-day sign-in on personal devices**.
+The code is tested, and Kirk reports migration 06 and tests 07 both passed on November 19, 2026. The GitHub Pages deployment succeeded for release commit `7d11250`; the public app bundle and Apple touch icon were verified. Kirk chose **in-app reminders with confirmation before adding each recurring expense**, and **30-day sign-in on personal devices**.
 
 1. In a fresh Supabase SQL Editor query, run all of `supabase/06-expense-management.sql`. It adds recurring schedules, version-checked edits/soft deletion, private change history, and a 30-day MFA freshness check. It does not rewrite the imported financial values.
 2. In another fresh query, run all of `supabase/07-management-tests.sql`. Expect `PASS: editing, deletion, audit, recurring dates, duplicate protection, and MFA freshness`. It uses synthetic records only and rolls them back, including when real imported expenses exist. If a failed query leaves a transaction open, run `ROLLBACK;` before retrying.
-3. Report only success or non-sensitive error text. After success, publish the prepared app through the existing GitHub Pages workflow. Do not rerun migration 01 or the old empty-ledger tests as a substitute for these tests.
+3. **Completed:** both owner queries passed and the updated app was published. The remaining steps are the user testing checklist. Do not rerun migration 01 or the old empty-ledger tests as a substitute for these tests.
 4. Refresh Honey Money. Edit a test entry, verify the updated balance, then delete it and check that it is excluded. An audit record retains the previous values. Both people can manage household entries; stale versions fail instead of overwriting another person's changes.
 5. Create a recurring schedule with an amount, payer, split, frequency, and first due date. Due reminders appear in the app using Pacific dates. **Review & Add** posts one occurrence; **Skip** advances without adding an entry. Nothing is auto-posted, emailed, or pushed to the phone. Pause/Resume stops/restarts reminders. To change amount/cadence, pause and replace the schedule. Editing/deleting an existing occurrence does not change its schedule.
 6. On a personal device, leave **Keep me signed in** selected and complete password/MFA once. Reopening should retain access until the 30-day MFA period expires (or the session is revoked/storage is cleared). Shared devices should uncheck this box. Explicit sign-out requires password/MFA again; to avoid repeated prompts on your own device, close the app instead of signing out. The old 15-minute inactivity timeout is removed.
@@ -139,3 +140,37 @@ Local validation covers database access/atomicity, version conflicts, date ancho
 ## Recovery if an authenticator is lost
 
 Use a private authenticator backup first. If unavailable, the Supabase project owner must verify the person and remove the lost MFA factor in the Auth dashboard or through Supabase's documented admin flow. The next sign-in must enroll and verify a new factor; no expense access is allowed at `aal1`. Keep your owner account recovery separate from the app accounts. Do not temporarily disable the expense policies to recover access.
+
+## Next session handoff
+
+Kirk will test the live November 19 update. Await his feedback on edit/delete and balance changes, recurring reminders and confirmation/skip/pause, remembered login after closing/reopening, and the actual iPhone Home Screen icon. Verify consistency on both devices after refreshing. These checks have not yet been reported complete. Automated tests (nine tests), the production build, and isolated mobile UI checks passed; no live signed-in session or private expense records were accessed during verification. The 30-day expiry logic was tested, but thirty actual days have not elapsed.
+
+Kirk subsequently reported iPhone layout/scroll issues and requested expense-to-recurring conversion; see the follow-up below. The manual CSV backup is still planned, not reported complete.
+
+## 10. iPhone layout and expense-to-recurring follow-up
+
+Prepared after Kirk’s initial iPhone test: the page appeared too zoomed in and scrolling an edit dialog sometimes moved the expense list underneath. The follow-up also adds a checkbox at the bottom of new/native/imported expense forms to make the expense recurring. Kirk reports migration 08 and tests 09 passed and approved shipping this follow-up.
+
+1. Run all of `supabase/08-repeat-from-expense.sql` in a fresh owner SQL Editor query. This adds source links and a transaction that saves an expense and creates its future schedule together.
+2. Run `supabase/09-repeat-from-expense-tests.sql` in a second fresh query. Expect `PASS: expense-to-recurring conversion, rollback, source links, and duplicate protection`. It adds synthetic records only and rolls everything back, including alongside real imported records. If an error leaves an open transaction, run `ROLLBACK;` before retrying.
+3. After both pass, publish the prepared app. Refresh/relaunch on iPhone and retest initial margins, focusing form fields, scrolling a long dialog to both ends, and closing/cancelling back to the same expense-list position. Pinch zoom remains available.
+4. Open a new or existing expense and check **Make this a recurring expense** at the bottom. Choose the repeat interval and **First reminder due**, which must be after the original expense date. The suggested date is one interval from today; change it if needed. The saved original is not posted twice. Future due items still require Review & Add.
+5. For imported entries, also confirm the future positive amount, payer, and Kirk’s share. These defaults are assumptions for the new schedule; the original imported cost/balance effect stays as saved in the editor. An existing schedule or generated occurrence is not converted again; manage that schedule under Recurring & reminders.
+
+The layout changes use mobile form text of at least 16px and grid/viewport sizing constraints. The dialog implementation fixes the background page at its prior scroll position, contains internal scrolling, and restores the page position on close. Automated mobile layout/scroll and conversion tests pass with fabricated records. A real iPhone retest remains pending; no account credentials or private expense records are needed in chat.
+
+### Additional reminder and payer-display refinements (same pending release)
+
+Kirk requested a quiet To do bar near the top of the page, with a red number indicating recurring expenses awaiting entry. The prepared version places it below the greeting, counts due occurrences (including missed cycles), and keeps the list collapsed until tapped. Review & Add or Skip updates the count; the rest of the page remains usable. All caught up replaces the red badge when the count is zero. Reminders are displayed in the app only.
+
+The assumed-payer display is intended for the existing Splitwise import, not only new imports. The earlier source retained Toward Kirk/Jenny beside the amount while showing the assumed payer in a smaller paragraph. The prepared update replaces that prominent label with Kirk paid (assumed) or Jenny paid (assumed). Balance effects remain unchanged; no reimport is needed. A separate live public-asset recheck was not performed during this follow-up; no signed-in browser or expense records were accessed.
+
+After tests 08/09 pass and this follow-up is published, retest the compact to-do badge, expand/collapse, due-count changes after confirmation/skip, and the payer wording on an existing imported expense. The pending iPhone layout/scroll and recurring-conversion checks above still apply.
+
+## Approved follow-up rollout — November 19, 2026
+
+Kirk confirmed SQL migration 08 and tests 09 completed successfully and approved shipping the iPhone layout fixes, modal scroll locking, make-recurring checkbox, compact red-count To do bar, and prominent assumed payer labels. The expense-to-recurring changes save the original once and create its future schedule atomically. These changes require no more owner SQL setup.
+
+Kirk also requested a more practical expense-splitting tone while keeping the existing colors. Copy now uses direct labels such as Sign in, Current balance, Expenses, and Save expense. Romantic taglines, hearts, and bunny artwork are removed from the interface; headings use a more restrained sans-serif style. The brand/Home Screen icon is a dollar sign in a honey pot, using the existing green, cream, and honey palette. Apple touch and manifest icon URLs include a new revision to reduce stale icon caching. Existing iPhone shortcuts may still need to be removed and re-added in Safari.
+
+Validation: all 12 automated tests, production build, and isolated mobile UI checks passed. No private expense records or signed-in user browser were accessed. Deployment proceeds through the existing GitHub Pages workflow. The next user check is to refresh/relaunch on iPhone and retest margins/zoom, modal scrolling, the recurring checkbox, to-do count, existing imported payer wording, and the new icon. Actual iPhone acceptance testing for this follow-up remains pending; the manual CSV backup also remains deferred.

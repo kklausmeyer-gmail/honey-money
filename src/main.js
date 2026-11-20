@@ -4,6 +4,8 @@ import { cents, kirkShare, money, today, balance, searchable, assumedPayer } fro
 import { previewSplitwise, signedCents } from './splitwise.js';
 import { mfaExpiresAt } from './session.js';
 import { managementUI } from './management.js';
+import { openDialog } from './dialog.js';
+import { repeatControls, repeatValues } from './recurrence.js';
 
 const app = document.querySelector('#app');
 let state = { session: null, person: null, rows: [], view: 'expenses', query: '', factor: null, enrollment: null, recovery: false };
@@ -12,10 +14,10 @@ let authRevision = 0;
 let mfaTimer;
 let authQueue = Promise.resolve();
 const esc = (s = '') => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const icon = '<span class="brand-icon" aria-hidden="true">♡</span>';
-const brand = `<a class="brand" href="./">${icon}<span>honey money<small>JUST US TWO</small></span></a>`;
+const icon = '<img class="brand-icon" src="./public-icon.svg" alt="" aria-hidden="true" />';
+const brand = `<a class="brand" href="./">${icon}<span>honey money<small>SHARED EXPENSES</small></span></a>`;
 const notice = '<div id="notice" role="status" aria-live="polite"></div>';
-const header = () => `<header>${brand}<div class="header-right"><span class="private-label">◈ A little space for the two of you</span>${state.session ? '<button class="quiet" id="signout">Sign out</button>' : ''}</div></header>`;
+const header = () => `<header>${brand}<div class="header-right"><span class="private-label">Private household expenses</span>${state.session ? '<button class="quiet" id="signout">Sign out</button>' : ''}</div></header>`;
 function message(text, error = false) {
   const el = document.querySelector('#notice');
   if (el) { el.textContent = text; el.className = error ? 'notice error' : 'notice success'; }
@@ -49,7 +51,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => { state.rows = []; state.schedules = []; document.querySelector('#expense-dialog')?.replaceChildren(); });
 
 function renderLogin() {
-  app.innerHTML = `${header()}<main class="welcome"><section class="welcome-copy"><h1>A little less math.<br>A lot more <em>us.</em></h1><p>Your everyday expenses, happily together.<br>A private place for Jenny & Kirk to keep things fair.</p><div class="bunny-art" aria-hidden="true"><div class="sun">♡</div><div class="bunny one"><i></i><i></i><b>·ᴗ·</b></div><div class="bunny two"><i></i><i></i><b>·ᴗ·</b></div><span class="flower">✳</span><div class="ground"></div></div><div class="little-note">For our home, our plans, and all the little things.</div></section><section class="auth-card"><span class="pill">YOUR PRIVATE CORNER</span><h2>Hey, honey.</h2><p>Make yourself at home.</p>${notice}${configured ? `<form id="login"><label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input type="password" name="password" autocomplete="current-password" required /></label><label class="duplicate"><input type="checkbox" name="remember" checked /> Keep me signed in on this personal device for up to 30 days.</label><button class="primary" type="submit">Come on in <span>→</span></button></form><button class="text-button" id="forgot">Forgot your password?</button><div class="card-footer">◈ Just Jenny & Kirk · Two-step sign-in</div>` : `<div class="setup-box"><h3>Your cozy corner is ready.</h3><p>Connect your Supabase project to enable private sign-in. Follow the setup guide included with this app.</p><p class="small">No database is connected. No expenses have been imported.</p></div>`}</section></main><footer>Made for two. With a little honey.</footer>`;
+  app.innerHTML = `${header()}<main class="welcome"><section class="welcome-copy"><h1>Shared expenses.<br>A clear balance.</h1><p>Track what you spend, see who owes what,<br>and manage recurring expenses in one place.</p><div class="welcome-ledger" aria-hidden="true"><img src="./public-icon.svg" alt="" /><div>Track spending<br>Split costs<br>Stay up to date</div></div></section><section class="auth-card"><span class="pill">PRIVATE ACCESS</span><h2>Sign in</h2><p>Access your household expenses.</p>${notice}${configured ? `<form id="login"><label>Email<input type="email" name="email" autocomplete="username" required placeholder="you@example.com" /></label><label>Password<input type="password" name="password" autocomplete="current-password" required /></label><label class="duplicate"><input type="checkbox" name="remember" checked /> Keep me signed in on this personal device for up to 30 days.</label><button class="primary" type="submit">Sign in <span>→</span></button></form><button class="text-button" id="forgot">Forgot your password?</button><div class="card-footer">Jenny & Kirk · Two-step verification</div>` : `<div class="setup-box"><h3>Complete setup</h3><p>Connect your Supabase project to enable private sign-in. Follow the setup guide included with this app.</p><p class="small">No database is connected. No expenses have been imported.</p></div>`}</section></main><footer>Honey Money · Shared expense tracking</footer>`;
   wireSignout();
   document.querySelector('#login')?.addEventListener('submit', e => action(e, async form => {
     setRememberDevice(Boolean(form.get('remember')));
@@ -69,11 +71,11 @@ async function action(event, fn) {
   finally { if (button?.isConnected) button.disabled = false; }
 }
 function authCard(title, body) {
-  app.innerHTML = `${header()}<main class="centered"><section class="auth-card"><span class="pill">JUST US TWO</span><h2>${title}</h2>${notice}${body}</section></main>`;
+  app.innerHTML = `${header()}<main class="centered"><section class="auth-card"><span class="pill">SHARED EXPENSES</span><h2>${title}</h2>${notice}${body}</section></main>`;
   wireSignout();
 }
 function renderResetRequest() {
-  authCard('A fresh start.', '<p>We’ll send a password reset link to your email.</p><form id="reset"><label>Email<input name="email" type="email" autocomplete="email" required /></label><button type="submit" class="primary">Send reset link →</button></form><button id="back" class="text-button">Back to sign in</button>');
+  authCard('Reset your password', '<p>We’ll send a password reset link to your email.</p><form id="reset"><label>Email<input name="email" type="email" autocomplete="email" required /></label><button type="submit" class="primary">Send reset link →</button></form><button id="back" class="text-button">Back to sign in</button>');
   document.querySelector('#back').onclick = renderLogin;
   document.querySelector('#reset').onsubmit = e => action(e, async form => {
     const { error } = await client.auth.resetPasswordForEmail(form.get('email'), { redirectTo: new URL('./', location.href).href });
@@ -99,11 +101,11 @@ async function route(session) {
   state.schedules = [];
   if (!session) return renderLogin();
   scheduleMfaCheck();
-  authCard('One little moment…', '<p>Checking your private space.</p>');
+  authCard('Loading…', '<p>Checking your account.</p>');
   const { data: person, error } = await client.rpc('my_membership');
   if (ticket !== generation) return;
-  if (error) return authCard('Setup needs a little care.', '<p>The membership check could not complete. Run the database setup scripts, then sign out and try again.</p>');
-  if (!person) return authCard('This space is just for two.', '<p>This account has not been added to Honey Money. The project owner needs to add your user ID using the membership setup script.</p>');
+  if (error) return authCard('Setup required', '<p>The membership check could not complete. Run the database setup scripts, then sign out and try again.</p>');
+  if (!person) return authCard('Account not authorized', '<p>This account has not been added to Honey Money. The project owner needs to add your user ID using the membership setup script.</p>');
   state.person = person;
   const { data: assurance, error: assuranceError } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
   if (ticket !== generation) return;
@@ -126,7 +128,7 @@ async function renderMfa(ticket) {
   const factor = data.totp.find(f => f.status === 'verified');
   state.factor = factor?.id;
   state.enrollment = null;
-  authCard(factor ? 'One more little step.' : 'Let’s keep this just ours.', `${factor ? '<p>Enter the six-digit code from your authenticator app.</p>' : '<p>Connect an authenticator app to protect your shared expenses. Keep its backup in your password manager.</p><button id="enroll" class="secondary">Set up authenticator</button><div id="qr"></div>'}<form id="verify" ${factor ? '' : 'hidden'}><label>Authenticator code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label><button type="submit" class="primary">Unlock our space →</button></form>`);
+  authCard(factor ? 'Verify your identity' : 'Set up two-step verification', `${factor ? '<p>Enter the six-digit code from your authenticator app.</p>' : '<p>Connect an authenticator app to protect your shared expenses. Keep its backup in your password manager.</p><button id="enroll" class="secondary">Set up authenticator</button><div id="qr"></div>'}<form id="verify" ${factor ? '' : 'hidden'}><label>Authenticator code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required /></label><button type="submit" class="primary">Verify and continue →</button></form>`);
   document.querySelector('#enroll')?.addEventListener('click', async e => {
     e.target.disabled = true;
     try {
@@ -208,7 +210,7 @@ async function loadExpenses(ticket = generation) {
 }
 function renderDashboard() {
   const net = balance(state.rows);
-  app.innerHTML = `${header()}<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">OUR EVERYDAY, TOGETHER</span><h1>Hey, ${state.person === 'jenny' ? 'Jenny' : 'Kirk'} <span class="heart">♡</span></h1><p>All the little things that add up to us.</p></div><button class="primary compact" id="add">+ Add an expense</button></div><section class="summary"><div><span class="eyebrow">KEEPING THINGS FAIR</span><h2>${net === 0 ? 'All square, honey.' : `${net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(net))}`}</h2><p>${state.rows.length ? 'Based on your saved expenses and imported history.' : 'Your fresh start. No expenses entered yet.'}</p></div><span class="summary-art" aria-hidden="true">♡<small>you + me</small></span></section>${management.recurringMarkup()}<section class="ledger"><div class="ledger-top"><h2>Our expenses <span class="count">${state.rows.length}</span></h2><button class="quiet" id="refresh">↻ Refresh</button></div><label class="search-label"><span class="sr-only">Search expenses</span><input type="search" id="search" placeholder="Search names, notes, tags, amounts…" value="${esc(state.query)}" /></label><div id="expenses"></div></section><aside class="privacy-note">◈ Only the two of you can access these records. Personal devices stay signed in for up to 30 days after authenticator verification. Sign out on shared devices.</aside></main><footer>Made for two. With a little honey.</footer><dialog id="expense-dialog"></dialog>`;
+  app.innerHTML = `${header()}<main class="dashboard"><div class="page-heading"><div><span class="eyebrow">HOUSEHOLD OVERVIEW</span><h1>Hi, ${state.person === 'jenny' ? 'Jenny' : 'Kirk'} </h1><p>Expenses, balances, and recurring payments.</p></div><button class="primary compact" id="add">+ Add an expense</button></div>${management.recurringMarkup()}<section class="summary"><div><span class="eyebrow">CURRENT BALANCE</span><h2>${net === 0 ? 'Settled up' : `${net > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(net))}`}</h2><p>${state.rows.length ? 'Based on your saved expenses and imported history.' : 'No expenses entered yet.'}</p></div><img class="balance-icon" src="./public-icon.svg" alt="" aria-hidden="true" /></section><section class="ledger"><div class="ledger-top"><h2>Expenses <span class="count">${state.rows.length}</span></h2><button class="quiet" id="refresh">↻ Refresh</button></div><label class="search-label"><span class="sr-only">Search expenses</span><input type="search" id="search" placeholder="Search names, notes, tags, amounts…" value="${esc(state.query)}" /></label><div id="expenses"></div></section><aside class="privacy-note">◈ Only the two of you can access these records. Personal devices stay signed in for up to 30 days after authenticator verification. Sign out on shared devices.</aside></main><footer>Honey Money · Shared expense tracking</footer><dialog id="expense-dialog"></dialog>`;
   wireSignout();
   document.querySelector('#add').onclick = () => renderExpenseForm();
   management.wireRecurring();
@@ -224,22 +226,22 @@ function renderDashboard() {
 }
 function renderRows() {
   const rows = state.rows.filter(r => searchable(r, state.query));
-  document.querySelector('#expenses').innerHTML = rows.length ? `<div class="expense-list">${rows.map(r => r.source === 'splitwise' ? historyRow(r) : `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">${esc(r.description.charAt(0).toUpperCase())}</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · ${r.paid_by === 'jenny' ? 'Jenny' : 'Kirk'} paid</p>${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}${r.tags.length ? `<p class="tags">${r.tags.map(t => `<span>#${esc(t)}</span>`).join(' ')}</p>` : ''}${management.actions(r)}</div><div class="expense-amount"><strong>${money(r.amount_cents)}</strong><small>Kirk ${money(r.kirk_share_cents)}<br>Jenny ${money(r.amount_cents - r.kirk_share_cents)}</small></div></article>`).join('')}</div>` : `<div class="empty-state"><span aria-hidden="true">♡</span><h3>${state.query ? 'No matches just yet.' : 'A clean slate for our next chapter.'}</h3><p>${state.query ? 'Try another name, note, date, or amount.' : 'Add your first shared expense when you’re ready.<br>Your Splitwise history can come later.'}</p></div>`;
+  document.querySelector('#expenses').innerHTML = rows.length ? `<div class="expense-list">${rows.map(r => r.source === 'splitwise' ? historyRow(r) : `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">${esc(r.description.charAt(0).toUpperCase())}</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · ${r.paid_by === 'jenny' ? 'Jenny' : 'Kirk'} paid</p>${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ''}${r.tags.length ? `<p class="tags">${r.tags.map(t => `<span>#${esc(t)}</span>`).join(' ')}</p>` : ''}${management.actions(r)}</div><div class="expense-amount"><strong>${money(r.amount_cents)}</strong><small>Kirk ${money(r.kirk_share_cents)}<br>Jenny ${money(r.amount_cents - r.kirk_share_cents)}</small></div></article>`).join('')}</div>` : `<div class="empty-state"><span aria-hidden="true">$</span><h3>${state.query ? 'No matching expenses' : 'No expenses yet'}</h3><p>${state.query ? 'Try another name, note, date, or amount.' : 'Add your first shared expense when you’re ready.<br>Your Splitwise history can come later.'}</p></div>`;
   management.wireRows();
 }
 function historyRow(r) {
   const delta = r.kirk_delta_cents;
   const payer = assumedPayer(r);
   const paid = payer ? `${payer === 'kirk' ? 'Kirk' : 'Jenny'} paid (assumed)` : r.kind === 'settlement' ? 'Payment / settlement' : 'No payer assumed';
-  const effect = delta === 0 ? 'No balance change' : `${delta > 0 ? 'Toward Kirk' : 'Toward Jenny'} ${money(Math.abs(delta))}`;
-  return `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">↗</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · Splitwise ${r.kind === 'settlement' ? 'settlement' : 'history'}</p><p>${paid}. ${r.kind === 'settlement' ? 'Preserved payment balance change.' : 'Shared expense; original split details unavailable.'}</p>${management.actions(r)}</div><div class="expense-amount"><strong>${money(r.cost_cents)}</strong><small>${effect}</small></div></article>`;
+  const effect = delta === 0 ? 'No balance change' : `${delta > 0 ? 'Jenny owes Kirk' : 'Kirk owes Jenny'} ${money(Math.abs(delta))} from this entry`;
+  return `<article class="expense-row"><div class="expense-symbol" aria-hidden="true">↗</div><div class="expense-title"><h3>${esc(r.description)}</h3><p>${esc(r.expense_date)} · ${esc(r.category)} · Splitwise ${r.kind === 'settlement' ? 'settlement' : 'history'}</p><p>${effect}</p>${management.actions(r)}</div><div class="expense-amount"><strong>${money(r.cost_cents)}</strong><small class="payer-label">${paid}</small></div></article>`;
 }
 
 function renderImport() {
   const dialog = document.querySelector('#expense-dialog');
   const ticket = generation;
   dialog.innerHTML = `<div class="dialog-heading"><h2>Your Splitwise history.</h2><button class="quiet" id="close-import" aria-label="Close">✕</button></div><p class="small">Choose your original group CSV. Previewing keeps the file on this device. Saving sends the validated records to your household database. Historical payer and split details remain unknown; Payment rows are settlements.</p><div id="import-error" class="error" role="alert"></div>${!state.importAvailable ? '<p>First run <strong>supabase/04-splitwise-import.sql</strong> in your own Supabase SQL Editor, then refresh this app.</p>' : state.rows.length ? '<p>The initial import needs an empty ledger. Review existing entries before proceeding.</p>' : '<label>Splitwise CSV<input id="import-file" type="file" accept=".csv,text/csv" /></label><div id="import-preview"></div>'}`;
-  dialog.showModal();
+  openDialog(dialog);
   document.querySelector('#close-import').onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.replaceChildren(), { once: true });
   document.querySelector('#import-file')?.addEventListener('change', async e => {
@@ -280,8 +282,9 @@ function renderImport() {
 }
 function renderExpenseForm(row = null, recurring = false) {
   const ticket = generation;
+  const newId = crypto.randomUUID();
   const dialog = document.querySelector('#expense-dialog');
-  dialog.innerHTML = `<form id="expense-form"><div class="dialog-heading"><h2>A little something shared.</h2><button type="button" id="close" class="quiet" aria-label="Close">✕</button></div><p class="small">All amounts in USD. For an odd cent, Jenny takes the extra cent in an equal split.</p><div id="form-error" class="error" role="alert"></div><label>Name<input name="description" maxlength="200" required placeholder="What was it for?" /></label><div class="form-grid"><label>Date<input name="expense_date" type="date" value="${today()}" required /></label><label>Amount ($)<input name="amount" inputmode="decimal" required placeholder="0.00" /></label></div><div class="form-grid"><label>Who paid?<select name="paid_by"><option value="${state.person}">${state.person === 'jenny' ? 'Jenny' : 'Kirk'}</option><option value="${state.person === 'jenny' ? 'kirk' : 'jenny'}">${state.person === 'jenny' ? 'Kirk' : 'Jenny'}</option></select></label><label>How do we split it?<select name="split" id="split"><option value="half">50 / 50</option><option value="kirk">All Kirk</option><option value="jenny">All Jenny</option><option value="custom">Custom amounts</option></select></label></div><label id="custom-label" hidden>Kirk’s share ($)<input name="custom" inputmode="decimal" placeholder="0.00" /><small>Jenny’s share is the remainder.</small></label><div class="form-grid"><label>Category<input name="category" maxlength="80" value="General" list="categories" /><datalist id="categories"><option>Groceries</option><option>Home</option><option>Dining</option><option>Travel</option><option>Utilities</option><option>Health</option></datalist></label><label>Tags<input name="tags" placeholder="home, monthly" maxlength="500" /></label></div><label>Notes<textarea name="notes" maxlength="4000" rows="3" placeholder="Auto debited, paid by Zelle, anything to remember…"></textarea></label><label id="duplicate-label" hidden class="duplicate"><input type="checkbox" name="confirm_duplicate" /> A similar expense exists. Save this one too.</label><button type="submit" class="primary">Save our expense →</button></form>`;
+  dialog.innerHTML = `<form id="expense-form"><div class="dialog-heading"><h2>Add expense</h2><button type="button" id="close" class="quiet" aria-label="Close">✕</button></div><p class="small">All amounts in USD. For an odd cent, Jenny takes the extra cent in an equal split.</p><div id="form-error" class="error" role="alert"></div><label>Name<input name="description" maxlength="200" required placeholder="What was it for?" /></label><div class="form-grid"><label>Date<input name="expense_date" type="date" value="${today()}" required /></label><label>Amount ($)<input name="amount" inputmode="decimal" required placeholder="0.00" /></label></div><div class="form-grid"><label>Who paid?<select name="paid_by"><option value="${state.person}">${state.person === 'jenny' ? 'Jenny' : 'Kirk'}</option><option value="${state.person === 'jenny' ? 'kirk' : 'jenny'}">${state.person === 'jenny' ? 'Kirk' : 'Jenny'}</option></select></label><label>How do we split it?<select name="split" id="split"><option value="half">50 / 50</option><option value="kirk">All Kirk</option><option value="jenny">All Jenny</option><option value="custom">Custom amounts</option></select></label></div><label id="custom-label" hidden>Kirk’s share ($)<input name="custom" inputmode="decimal" placeholder="0.00" /><small>Jenny’s share is the remainder.</small></label><div class="form-grid"><label>Category<input name="category" maxlength="80" value="General" list="categories" /><datalist id="categories"><option>Groceries</option><option>Home</option><option>Dining</option><option>Travel</option><option>Utilities</option><option>Health</option></datalist></label><label>Tags<input name="tags" placeholder="home, monthly" maxlength="500" /></label></div><label>Notes<textarea name="notes" maxlength="4000" rows="3" placeholder="Auto debited, paid by Zelle, anything to remember…"></textarea></label><label id="duplicate-label" hidden class="duplicate"><input type="checkbox" name="confirm_duplicate" /> A similar expense exists. Save this one too.</label><button type="submit" class="primary">Save expense →</button></form>`;
   const formElement = document.querySelector('#expense-form');
   if (row) {
     const values = { ...row, amount: (row.amount_cents / 100).toFixed(2), custom: (row.kirk_share_cents / 100).toFixed(2), split: 'custom', tags: row.tags.join(', ') };
@@ -291,13 +294,14 @@ function renderExpenseForm(row = null, recurring = false) {
     formElement.querySelector('[type="submit"]').textContent = 'Save changes';
   }
   if (recurring) {
-    formElement.querySelector('h2').textContent = 'A recurring little thing.';
+    formElement.querySelector('h2').textContent = 'Recurring expense';
     const schedule = document.createElement('label');
     schedule.innerHTML = 'Repeat<select name="frequency"><option value="monthly">Monthly</option><option value="weekly">Weekly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select><small>The date above is the first due date. Each occurrence needs confirmation; creating a schedule adds no expenses.</small>';
     formElement.querySelector('[type="submit"]').before(schedule);
     formElement.querySelector('[type="submit"]').textContent = 'Create recurring reminder';
   }
-  dialog.showModal();
+  else if (state.managementAvailable) repeatControls({ form: formElement, row, schedules: state.schedules || [], esc });
+  openDialog(dialog);
   document.querySelector('#close').onclick = () => dialog.close();
   document.querySelector('#split').onchange = e => { document.querySelector('#custom-label').hidden = e.target.value !== 'custom'; };
   document.querySelector('#expense-form').onsubmit = async e => {
@@ -318,12 +322,14 @@ function renderExpenseForm(row = null, recurring = false) {
         throw new Error('We found an expense with the same date, name, and amount. Check the box if this is a separate expense.');
       }
       const values = { description, expense_date: form.get('expense_date'), amount_cents: amount, paid_by: form.get('paid_by'), kirk_share_cents: kirkShare(amount, form.get('split'), form.get('custom')), category: form.get('category').trim() || 'General', tags, notes: form.get('notes').trim() };
+      const repeat = recurring ? null : repeatValues(form, values);
       if (ticket !== generation) return;
       const { error } = recurring
         ? await client.rpc('save_recurring', { p_id: null, p_version: null, p_values: { ...values, frequency: form.get('frequency'), anchor_date: values.expense_date } })
+        : repeat ? await client.rpc('save_and_repeat_expense', { p_source: 'expenses', p_id: row?.id || null, p_version: row?.version || null, p_new_id: newId, p_values: values, p_schedule: repeat })
         : row ? await client.rpc('change_expense', { p_source: 'expenses', p_id: row.id, p_version: row.version, p_action: 'edit', p_values: values })
         : await client.from('expenses').insert(values);
-      if (ticket !== generation) return;
+      if (ticket !== generation || !formEl.isConnected || !dialog.open) return;
       if (error?.code === '40001') throw new Error('This entry changed on another device. Close this window, refresh, and try again.');
       if (error) throw new Error('Could not save. Check your connection and session, then try again.');
       dialog.close();
@@ -343,7 +349,7 @@ if (client) {
       if (mfaExpiresAt(session) <= Date.now()) {
         state.rows = [];
         const revision = ++authRevision;
-        authQueue = authQueue.then(() => new Promise(resolve => setTimeout(resolve, 0))).then(() => { if (revision === authRevision) return route(session); }).catch(() => { state.rows = []; state.schedules = []; authCard('A small connection hiccup.', '<p>Please sign out and try again.</p>'); });
+        authQueue = authQueue.then(() => new Promise(resolve => setTimeout(resolve, 0))).then(() => { if (revision === authRevision) return route(session); }).catch(() => { state.rows = []; state.schedules = []; authCard('Connection issue', '<p>Please sign out and try again.</p>'); });
       }
       return;
     }
@@ -353,7 +359,7 @@ if (client) {
         if (revision === authRevision) return route(session);
       }).catch(() => {
         state.rows = [];
-        authCard('A small connection hiccup.', '<p>Please sign out and try again.</p>');
+        authCard('Connection issue', '<p>Please sign out and try again.</p>');
       });
     }
   });

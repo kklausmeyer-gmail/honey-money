@@ -7,7 +7,7 @@ const { chromium } = await import(pathToFileURL(process.argv[2] + '/index.mjs'))
 const browser = await chromium.launch({ headless: true, ...(process.argv[3] ? { executablePath: process.argv[3] } : {}) });
 try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
-  await context.route('http://honey-money.test/**', async route => {
+  await context.route('http://localhost/**', async route => {
     const pathname = new URL(route.request().url()).pathname;
     const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
     assert.ok(!relative.includes('..'));
@@ -38,6 +38,14 @@ try {
     else if(name==='expenses' && req.method()==='GET') result=expenses;
     else if(name==='splitwise_history') result=history;
     else if(name==='recurring_expenses') result=schedules;
+    else if(req.method()==='POST' && name==='save_and_repeat_expense') {
+      const body=req.postDataJSON(); writes.push({name,body});
+      const source=body.p_source==='expenses'?expenses:history;
+      if(body.p_id) {const row=source.find(r=>r.id===body.p_id); assert.equal(row.version,body.p_version); Object.assign(row,body.p_values); row.version++;}
+      else source.push({id:body.p_new_id,...body.p_values,version:1});
+      schedules.push({id:crypto.randomUUID(),...body.p_schedule,next_due:body.p_schedule.anchor_date,active:true,version:1,source_type:body.p_source,source_id:body.p_id||body.p_new_id});
+      result=schedules.at(-1).id;
+    }
     else if(req.method()==='POST' && name==='change_expense') {
       const body=req.postDataJSON(); writes.push({name,body});
       const row=(body.p_source==='expenses'?expenses:history).find(r=>r.id===body.p_id);
@@ -59,11 +67,32 @@ try {
     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(result)});
   });
   const page = await context.newPage(); page.on('pageerror',e=>errors.push(e.message));
-  await page.goto('http://honey-money.test/');
-  try { await page.getByText('Hey, Kirk').waitFor({timeout:10000}); }
+  await page.goto('http://localhost/');
+  try { await page.getByText('Hi, Kirk').waitFor({timeout:10000}); }
   catch(e) { console.log('Synthetic-page errors:',errors); console.log(await page.locator('body').innerText()); throw e; }
   await page.getByText('Kirk paid (assumed)',{exact:false}).waitFor();
+  assert.equal(await page.locator('#todo-content').isVisible(),false);
+  assert.ok(Number(await page.locator('#todo-count').textContent()) > 0);
+  assert.equal(await page.getByText('Toward Kirk',{exact:false}).count(),0);
   assert.equal(await page.locator('link[rel="apple-touch-icon"]').count(),1);
+  for (const width of [320,375,390,430]) {
+    await page.setViewportSize({width,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page overflow at '+width);
+  }
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('[data-edit="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]').scrollIntoViewIfNeeded();
+  const beforeDialog=await page.evaluate(()=>scrollY);
+  await page.locator('[data-edit="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]').click();
+  assert.equal(await page.evaluate(()=>document.body.style.position),'fixed');
+  assert.ok(await page.locator('dialog input').evaluateAll(inputs=>inputs.every(el=>parseFloat(getComputedStyle(el).fontSize)>=16)));
+  assert.ok(await page.locator('dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),'dialog width');
+  const lockedTop=await page.evaluate(()=>document.body.style.top);
+  await page.locator('dialog').evaluate(el=>{el.scrollTop=el.scrollHeight;});
+  await page.mouse.move(10,10); await page.mouse.wheel(0,800);
+  assert.equal(await page.evaluate(()=>document.body.style.top),lockedTop);
+  await page.locator('#close').click(); await page.locator('dialog').waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(()=>document.body.style.position),'');
+  assert.ok(Math.abs(await page.evaluate(()=>scrollY)-beforeDialog)<2,'restores scroll position');
   await page.locator('[data-edit="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]').click();
   assert.equal(await page.locator('[name="amount"]').inputValue(),'10.00');
   await page.locator('[name="amount"]').fill('12.00');
@@ -79,6 +108,8 @@ try {
   await page.getByRole('button',{name:'Delete expense',exact:true}).click();
   await page.locator('dialog').waitFor({state:'hidden'});
   assert.equal(await page.locator('[data-edit="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]').count(),0);
+  await page.locator('#todo-toggle').click();
+  assert.equal(await page.locator('#todo-content').isVisible(),true);
   await page.locator('[data-confirm]').first().click();
   await page.locator('#recurring-action button').click();
   await page.locator('dialog').waitFor({state:'hidden'});
@@ -97,6 +128,27 @@ try {
   await page.getByRole('button',{name:'Create recurring reminder'}).click();
   await page.locator('dialog').waitFor({state:'hidden'});
   assert.equal(schedules.length,2);
+  await page.locator('[data-edit="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]').click();
+  assert.equal(await page.locator('[name="repeat_frequency"]').isVisible(),false);
+  await page.locator('[name="make_recurring"]').check();
+  await page.locator('[name="repeat_frequency"]').selectOption('quarterly');
+  await page.getByRole('button',{name:'Save changes',exact:true}).click();
+  await page.locator('dialog').waitFor({state:'hidden'});
+  assert.equal(writes.at(-1).name,'save_and_repeat_expense');
+  assert.equal(writes.at(-1).body.p_schedule.frequency,'quarterly');
+  assert.equal(writes.at(-1).body.p_values.kirk_delta_cents,300);
+  assert.equal(schedules.length,3);
+  await page.getByRole('button',{name:'+ Add an expense',exact:true}).click();
+  await page.locator('input[name="description"]').fill('Synthetic new repeat');
+  await page.locator('[name="amount"]').fill('20.00');
+  await page.locator('[name="make_recurring"]').check();
+  await page.locator('[name="repeat_frequency"]').selectOption('weekly');
+  await page.locator('#expense-form button[type="submit"]').click();
+  await page.locator('dialog').waitFor({state:'hidden'});
+  assert.equal(writes.at(-1).name,'save_and_repeat_expense');
+  assert.equal(writes.at(-1).body.p_id,null);
+  assert.equal(writes.at(-1).body.p_schedule.frequency,'weekly');
+  assert.equal(schedules.length,4);
   await page.locator('#search').fill('kirk');
   assert.ok(await page.locator('[data-edit="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]').count());
   await page.screenshot({path:'test-results/management-mobile.png',fullPage:true});
@@ -105,9 +157,9 @@ try {
   await page.locator('#login [name="email"]').fill('synthetic@example.invalid');
   await page.locator('#login [name="password"]').fill('SyntheticOnlyPassword!23');
   await page.locator('#login button[type="submit"]').click();
-  await page.getByText('Hey, Kirk').waitFor();
+  await page.getByText('Hi, Kirk').waitFor();
   assert.equal(await page.evaluate(()=>!!localStorage.getItem('sb-yjqitkswyeehqwotrdhz-auth-token')),true);
-  await page.reload(); await page.getByText('Hey, Kirk').waitFor();
+  await page.reload(); await page.getByText('Hi, Kirk').waitFor();
   await page.getByRole('button',{name:'Sign out',exact:true}).click();
   await page.locator('#login').waitFor();
   assert.equal(await page.evaluate(()=>!!localStorage.getItem('sb-yjqitkswyeehqwotrdhz-auth-token')),false);
@@ -115,7 +167,7 @@ try {
   await page.locator('#login [name="password"]').fill('SyntheticOnlyPassword!23');
   await page.locator('#login [name="remember"]').uncheck();
   await page.locator('#login button[type="submit"]').click();
-  await page.getByText('Hey, Kirk').waitFor();
+  await page.getByText('Hi, Kirk').waitFor();
   assert.equal(await page.evaluate(()=>!!localStorage.getItem('sb-yjqitkswyeehqwotrdhz-auth-token')),false);
   assert.equal(await page.evaluate(()=>!!sessionStorage.getItem('sb-yjqitkswyeehqwotrdhz-auth-token')),true);
   assert.deepEqual(errors,[]);
